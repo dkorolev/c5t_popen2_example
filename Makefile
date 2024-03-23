@@ -13,7 +13,7 @@
 # user-defined dependencies go here.
 # TODO(dkorolev): Support more than one of them on the `CMakeLists.txt` level.
 # TODO(dkorolev): Test that this works with `leveldb` too.
-C5T_DEPS=""
+C5T_DEPS="popen2"
 
 DEBUG_BUILD_DIR=$(shell echo "$${DEBUG_BUILD_DIR:-.current_debug}")
 RELEASE_BUILD_DIR=$(shell echo "$${RELEASE_BUILD_DIR:-.current}")
