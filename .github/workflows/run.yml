@@ -10,10 +10,7 @@ on:
 
 jobs:
   run:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - name: git clone
         uses: actions/checkout@v3
