@@ -11,6 +11,12 @@ echo
 make debug && echo && ./.current_debug/popen2/popen2_test --gtest_repeat=$N
 
 echo
+echo "=== MODULE ==="
+echo
+
+(cd popen2; git rev-parse HEAD)
+
+echo
 echo "=== RUN ==="
 echo
 
