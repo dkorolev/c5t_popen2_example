@@ -1,7 +1,19 @@
 #!/bin/bash
 
-make && echo && ./.current/popen2/popen2_test --gtest_repeat=100
+N=${1:-1}
 
 echo
+echo "=== TEST ==="
+echo
 
-make debug && echo && ./.current_debug/popen2/popen2_test --gtest_repeat=100
+make && echo && ./.current/popen2/popen2_test --gtest_repeat=$N
+echo
+make debug && echo && ./.current_debug/popen2/popen2_test --gtest_repeat=$N
+
+echo
+echo "=== RUN ==="
+echo
+
+make && echo && ./.current/example_popen2
+echo
+make debug && echo && ./.current_debug/example_popen2
