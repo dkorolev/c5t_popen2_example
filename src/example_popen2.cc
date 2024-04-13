@@ -67,12 +67,11 @@ int main(int argc, char* argv[]) {
               }
             }
           },
-          [kill_delay_s](std::function<void(std::string const&)> write, std::function<void()> kill) {
-            static_cast<void>(write);
+          [kill_delay_s](Popen2Runtime& ctx) {
             std::this_thread::sleep_for(std::chrono::milliseconds(int64_t(kill_delay_s * 1e3)));
             std::cout << std::fixed << std::setprecision(1) << "# killing after " << kill_delay_s << " seconds"
                       << std::endl;
-            kill();
+            ctx.Kill();
           });
       auto const t1 = current::time::Now();
       std::cout << std::fixed << std::setprecision(1) << "# ran for " << (t1 - t0).count() * 1e-6 << " seconds"
