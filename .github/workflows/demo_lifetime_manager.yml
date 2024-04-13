@@ -1,0 +1,20 @@
+name: ./demo_lifetime_manager.sh
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize]
+  push:
+    branches:
+    - stable
+
+jobs:
+  demo_lifetime_manager:
+    runs-on: ubuntu-latest
+    steps:
+      - name: git clone
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 1
+      - name: ./demo_lifetime_manager.sh
+        run: ./demo_lifetime_manager.sh
