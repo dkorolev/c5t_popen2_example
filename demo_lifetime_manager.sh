@@ -27,6 +27,14 @@ echo ::group::{release only cooperative}
 echo ::endgroup::
 
 echo
+echo "=== RELEASE CRASH TESTS ==="
+echo
+
+echo ::group::{release crash tests}
+for i in ./.current/crashtest_* ; do echo "Running $i"; $i; done
+echo ::endgroup::
+
+echo
 echo "=== MAKE DEBUG ==="
 echo
 
@@ -48,6 +56,14 @@ echo
 
 echo ::group::{debug only cooperative}
 ./.current_debug/demo_lifetime_manager --uncooperative=false
+echo ::endgroup::
+
+echo
+echo "=== DEBUG CRASH TESTS ==="
+echo
+
+echo ::group::{debug crash tests}
+for i in ./.current_debug/crashtest_* ; do echo "Running $i"; $i; done
 echo ::endgroup::
 
 echo
