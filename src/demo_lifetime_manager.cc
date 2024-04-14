@@ -8,7 +8,7 @@ DEFINE_bool(
     true,
     "Set to `false` to not start anything uncooperative, so that the code `exit(0)`-s instead of `abort()`-ing.");
 
-// This kill-switch-aware object will destruct gracefully.
+// This lifetime-aware object will destruct gracefully.
 struct CooperativeSlowlyDeletingObject final {
   int const value_;
 
@@ -27,7 +27,7 @@ struct CooperativeSlowlyDeletingObject final {
   }
 };
 
-// This kill-switch-aware object will destruct gracefully.
+// This lifetime-aware object will destruct gracefully.
 struct SemiCooperativeSlowlyDeletingObject final {
   SemiCooperativeSlowlyDeletingObject() {
     SafeStderr("SemiCooperativeSlowlyDeletingObject created.");
@@ -127,7 +127,7 @@ int main(int argc, char** argv) {
   SmallDelay();
 
   if (FLAGS_uncooperative) {
-    // Takes a whole minute to terminate, will be killed.
+    // Takes a whole minute to terminate, the binary will terminate forcefully w/o waiting.
     LIFETIME_TRACKED_THREAD("[ NOT COOPERATIVE! ] long operation non-cooperative", []() {
       size_t i = 0;
       while (true) {
@@ -167,6 +167,7 @@ int main(int argc, char** argv) {
   SmallDelay();
 
   if (FLAGS_uncooperative) {
+    // Refuses to terminate, the binary will terminate forcefully w/o waiting.
     LIFETIME_TRACKED_THREAD("[ NOT COOPERATIVE! ] thread to run bash #3", []() {
       LIFETIME_TRACKED_POPEN2(
           "[ NOT COOPERATIVE! ] popen2 running bash #3",
@@ -188,7 +189,7 @@ int main(int argc, char** argv) {
   LIFETIME_TRACKED_DEBUG_DUMP();
   SafeStderr("");
 
-  SafeStderr("Assuming the main program code is done by now, invoking `DoKill()`");
+  SafeStderr("Assuming the main program code is done by now, invoking `LIFETIME_MANAGER_EXIT()`");
   SafeStderr("");
   LIFETIME_MANAGER_EXIT(0);  // This will make the program terminate, one way or another, right away or after a delay.
 
