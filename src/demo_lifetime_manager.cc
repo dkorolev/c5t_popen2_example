@@ -83,16 +83,16 @@ int main(int argc, char** argv) {
     std::this_thread::sleep_for(std::chrono::milliseconds(3));
   };
 
-  auto& o1 = LIFETIME_TRACKED_GLOBAL("super-cooperative instance", CooperativeSlowlyDeletingObject, 42);
+  auto& o1 = LIFETIME_TRACKED_INSTANCE(CooperativeSlowlyDeletingObject, "super-cooperative instance", 42);
   o1.Dump();
   SmallDelay();
 
-  auto& o2 = LIFETIME_TRACKED_GLOBAL("semi-cooperative instance", SemiCooperativeSlowlyDeletingObject);
+  auto& o2 = LIFETIME_TRACKED_INSTANCE(SemiCooperativeSlowlyDeletingObject, "semi-cooperative instance");
   o2.Dump();
   SmallDelay();
 
   if (FLAGS_uncooperative) {
-    auto& o3 = LIFETIME_TRACKED_GLOBAL("[ NOT COOPERATIVE! ] offender instance", NonCooperativeSlowlyDeletingObject);
+    auto& o3 = LIFETIME_TRACKED_INSTANCE(NonCooperativeSlowlyDeletingObject, "[ NOT COOPERATIVE! ] offender instance");
     o3.Dump();
     SmallDelay();
   }

@@ -223,7 +223,7 @@ inline void LIFETIME_MANAGER_EXIT(int exit_code = 0,
 // as opposed to "a single thread to own them all". But okay for the test and for quick experiments.
 // TODO(dkorolev): The same semantics could be used to leverage that "single thread to own them all".
 template <class T, class... ARGS>
-T& LifetimeConstructObject(std::string const& text, char const* file, int line, ARGS&&... args) {
+T& CreateLifetimeTrackedInstance(char const* file, int line, std::string const& text, ARGS&&... args) {
   current::WaitableAtomic<T*> result(nullptr);
   // Construct in a dedicated thread, so that when it's time to destruct the destructors do not block one another!
   auto& s = LIFETIME_MANAGER_SINGLETON();
@@ -241,23 +241,7 @@ T& LifetimeConstructObject(std::string const& text, char const* file, int line, 
   return *result.GetValue();
 }
 
-#define KSW_IMPL2(foo, type) LifetimeConstructObject<type>(std::string() + foo + " # " + #type "()", __FILE__, __LINE__)
-#define KSW_IMPL3(foo, type, arg1) \
-  LifetimeConstructObject<type>(std::string() + foo + " # " + #type "(" #arg1 ")", __FILE__, __LINE__, arg1)
-
-#define KSW_N_ARGS_IMPL3(_1, _2, _3, n, ...) n
-#define KSW_N_ARGS_IMPL(args) KSW_N_ARGS_IMPL3 args
-
-#define KSW_NARGS(...) KSW_N_ARGS_IMPL((__VA_ARGS__, 3, 2, 1, 0))
-
-#define KSW_CHOOSER3(n) KSW_IMPL##n
-#define KSW_CHOOSER2(n) KSW_CHOOSER3(n)
-#define KSW_CHOOSER1(n) KSW_CHOOSER2(n)
-#define KSW_CHOOSERX(n) KSW_CHOOSER1(n)
-
-#define KWS_CONCAT_DISPATCH(x, y) x y
-
-#define LIFETIME_TRACKED_GLOBAL(...) KWS_CONCAT_DISPATCH(KSW_CHOOSERX(KSW_NARGS(__VA_ARGS__)), (__VA_ARGS__))
+#define LIFETIME_TRACKED_INSTANCE(type, ...) CreateLifetimeTrackedInstance<type>(__FILE__, __LINE__, __VA_ARGS__)
 
 // TODO(dkorolev): May make this into a variadic macro to allow passing arguments to this thread in a C+-native way.
 #define LIFETIME_TRACKED_THREAD(desc, body)                    \
