@@ -13,17 +13,19 @@
 
 // TODO(dkorolev): Combine `TrackedInstances` with what needs to be notified of termination.
 struct LifetimeManagerSingleton final {
+  // The `TrackedInstances` waitable atomic keeps track of everything that needs to be terminated before `::exit()`.
+  // If at least one tracked instance remains unfinished within the grace period, `::abort()` is performed instead.
+  // As a nice benefit, for tracked instances it is also journaled when and from what FILE:LINE did they start.
   struct TrackedInstances final {
-    // For printing / reporting.
-    // TODO(dkorolev): Unify and merge with `EnsureExactlyOnce`!
-    uint64_t next_id_desc = 0u;
+    uint64_t next_id_desc = 0u;  // Descending so that in the naturally sorted order the more recent items come first.
     std::map<uint64_t, std::string> still_alive;
   };
 
+  // The `EnsureExactlyOnce` waitable atomic is only used by `SubscribeToTerminationEvent` scopes.
+  // It can not be merged with `TrackedInstances`, since `TrackedInstances` MUST be waited at termination,
+  // while `SubscribeToTerminationEvent` subscribers SHOULD "just" be notified not more than once each.
   struct EnsureExactlyOnce final {
-    // To notify of termination exactly once.
-    // TODO(dkorolev): Unify and merge with `TrackedInstances`.
-    uint64_t next_id_desc = 0u;
+    uint64_t next_exactly_once_id = 0u;
     std::set<uint64_t> still_active;
   };
 
@@ -109,9 +111,9 @@ struct LifetimeManagerSingleton final {
     AbortIfNotInitialized();
     // Ensures that `f()` will only be called once, possibly from the very call to `SubscribeToTerminationEvent()`.
     size_t const unique_id = exactly_once_subscribers_.MutableUse([](EnsureExactlyOnce& safety) {
-      uint64_t const id = safety.next_id_desc;
+      uint64_t const id = safety.next_exactly_once_id;
       safety.still_active.insert(id);
-      --safety.next_id_desc;
+      ++safety.next_exactly_once_id;
       return id;
     });
     auto const call_f_exactly_once = [this, unique_id, f]() {
