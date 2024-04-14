@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <iostream>
 #include <atomic>
 #include <mutex>
@@ -10,12 +11,15 @@
 #include "bricks/strings/util.h"
 #include "bricks/sync/waitable_atomic.h"
 #include "bricks/file/file.h"
+#include "bricks/time/chrono.h"
 
 struct LifetimeTrackedInstance final {
   std::string description;
   std::string file_fullname;
   std::string file_basename;
-  uint32_t line;
+  uint32_t line_as_number;
+  std::string line_as_string;
+  std::chrono::microseconds t_added;
 
   static std::string BaseName(std::string const& s) {
     char const* r = s.c_str();
@@ -28,15 +32,17 @@ struct LifetimeTrackedInstance final {
   }
 
   LifetimeTrackedInstance() = default;
-  LifetimeTrackedInstance(std::string desc, std::string file, uint32_t line)
+  LifetimeTrackedInstance(std::string desc, std::string file, uint32_t line, std::chrono::microseconds t = current::time::Now())
       : description(std::move(desc)),
         file_fullname(std::move(file)),
         file_basename(BaseName(file_fullname)),
-        line(line) {
+        line_as_number(line),
+        line_as_string(current::ToString(line_as_number)),
+        t_added(t) {
   }
 
   std::string ToShortString() const {
-    return description + " @ " + file_basename + ':' + current::ToString(line);
+    return description + " @ " + file_basename + ':' + line_as_string;
   }
 };
 

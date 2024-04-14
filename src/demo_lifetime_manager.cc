@@ -188,7 +188,7 @@ int main(int argc, char** argv) {
   }
 
   auto const DumpLifetimeTrackedInstance = [](LifetimeTrackedInstance const& t) {
-    ThreadSafeLog("- " + t.description + " @ " + t.file_basename + ':' + current::ToString(t.line));
+    ThreadSafeLog("- " + t.description + " @ " + t.file_basename + ':' + t.line_as_string);
   };
 
   ThreadSafeLog("");
