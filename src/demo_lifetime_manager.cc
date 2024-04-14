@@ -1,8 +1,10 @@
 #include <mutex>
+
 #include "bricks/sync/waitable_atomic.h"
 #include "popen2.h"
 #include "lifetime_manager.h"
 #include "bricks/dflags/dflags.h"
+#include "bricks/strings/printf.h"
 
 DEFINE_bool(
     uncooperative,
@@ -188,7 +190,11 @@ int main(int argc, char** argv) {
   }
 
   auto const DumpLifetimeTrackedInstance = [](LifetimeTrackedInstance const& t) {
-    ThreadSafeLog("- " + t.description + " @ " + t.file_basename + ':' + t.line_as_string);
+    ThreadSafeLog(current::strings::Printf("- %s @ %s:%d, up %.3lfs",
+                                           t.description.c_str(),
+                                           t.file_basename.c_str(),
+                                           t.line_as_number,
+                                           1e-6 * (current::time::Now() - t.t_added).count()));
   };
 
   ThreadSafeLog("");

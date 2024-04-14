@@ -32,7 +32,10 @@ struct LifetimeTrackedInstance final {
   }
 
   LifetimeTrackedInstance() = default;
-  LifetimeTrackedInstance(std::string desc, std::string file, uint32_t line, std::chrono::microseconds t = current::time::Now())
+  LifetimeTrackedInstance(std::string desc,
+                          std::string file,
+                          uint32_t line,
+                          std::chrono::microseconds t = current::time::Now())
       : description(std::move(desc)),
         file_fullname(std::move(file)),
         file_basename(BaseName(file_fullname)),
