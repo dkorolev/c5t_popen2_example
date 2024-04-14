@@ -360,15 +360,22 @@ inline int LIFETIME_TRACKED_POPEN2_IMPL(
     std::vector<std::string> const& env = {}) {
   auto& mgr = LIFETIME_MANAGER_SINGLETON_IMPL();
   size_t const id = mgr.TrackingAdd(text, file, line);
+  std::shared_ptr<std::atomic_bool> popen2_done = std::make_shared<std::atomic_bool>(false);
   int const retval = popen2(
       cmdline,
       cb_line,
-      [&mgr, moved_cb_code = std::move(cb_code)](Popen2Runtime& ctx) {
+      [copy_popen_done = popen2_done, &mgr, moved_cb_code = std::move(cb_code)](Popen2Runtime& ctx) {
         // NOTE(dkorolev): On `popen2()` level it's OK to call `.Kill()` multiple times, only one will go through.
-        auto const scope = mgr.SubscribeToTerminationEvent([&ctx]() { ctx.Kill(); });
+        auto const scope =
+            mgr.SubscribeToTerminationEvent([&ctx, &mgr, captured_popen_done = std::move(copy_popen_done)]() {
+              if (!captured_popen_done->load()) {
+                ctx.Kill();
+              }
+            });
         moved_cb_code(ctx);
       },
       env);
+  popen2_done->store(true);
   mgr.TrackingRemove(id);
   return retval;
 }

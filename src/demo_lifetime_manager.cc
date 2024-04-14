@@ -75,10 +75,7 @@ int main(int argc, char** argv) {
   ParseDFlags(&argc, &argv);
 
   // The lifetime manager ensures the log functions are called in the thread-safe way.
-  LIFETIME_MANAGER_ACTIVATE([](std::string const& s) {
-    std::lock_guard lock(output_mutex);
-    std::cerr << "MGR: " << s << std::endl;
-  });
+  LIFETIME_MANAGER_ACTIVATE([](std::string const& s) { std::cerr << "MGR: " << s << std::endl; });
 
   auto const SmallDelay = []() {
     // Just so that the terminal output comes in predictable order, since there are `bash` invocations involved.
@@ -194,10 +191,9 @@ int main(int argc, char** argv) {
 
   // Also test that all is well if a POPEN2 process has terminated before `LIFETIME_MANAGER_EXIT()` is invoked.
   LIFETIME_TRACKED_THREAD("thread to run bash #4", []() {
-    LIFETIME_TRACKED_POPEN2(
-        "popen2 running bash #4",
-        {"bash", "-c", "echo dead in 0.5 seconds; sleep 0.5; echo dead"},
-        [](std::string const& line) { ThreadSafeLog("bash #4: " + line); });
+    LIFETIME_TRACKED_POPEN2("popen2 running bash #4",
+                            {"bash", "-c", "echo dead in 0.5 seconds; sleep 0.5; echo dead"},
+                            [](std::string const& line) { ThreadSafeLog("bash #4: " + line); });
   });
   SmallDelay();
 
