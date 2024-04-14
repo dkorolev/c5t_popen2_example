@@ -140,16 +140,21 @@ struct LifetimeManagerSingleton final {
   [[nodiscard]] current::WaitableAtomicSubscriberScope SubscribeToTerminationEvent(std::function<void()> f0) {
     AbortIfNotInitialized();
     // Ensures that `f0()` will only be called once, possibly from the very call to `SubscribeToTerminationEvent()`.
-    auto const f = [called = std::make_shared<current::WaitableAtomic<bool>>(false), f1 = std::move(f0)]() {
-      if (called->MutableUse([](bool& called_flag) {
-            if (called_flag) {
-              return false;
-            } else {
-              called_flag = true;
-              return true;
-            }
-          })) {
-        f1();
+    auto const f = [this, called = std::make_shared<current::WaitableAtomic<bool>>(false), f1 = std::move(f0)]() {
+      // Guard against spurious wakeups.
+      if (termination_initiated_atomic_ ||
+          termination_initiated_.ImmutableUse([](std::atomic_bool const& b) { return b.load(); })) {
+        // Guard against calling the user-provided `f0()` more than once.
+        if (called->MutableUse([](bool& called_flag) {
+              if (called_flag) {
+                return false;
+              } else {
+                called_flag = true;
+                return true;
+              }
+            })) {
+          f1();
+        }
       }
     };
     auto result = termination_initiated_.Subscribe(f);
