@@ -6,8 +6,10 @@
 #include <mutex>
 #include <thread>
 #include <map>
+#include <set>
 
 #include "bricks/util/singleton.h"
+#include "bricks/strings/printf.h"
 #include "bricks/strings/util.h"
 #include "bricks/sync/waitable_atomic.h"
 #include "bricks/file/file.h"
@@ -126,7 +128,7 @@ struct LifetimeManagerSingleton final {
   template <typename... ARGS>
   void EmplaceThreadImpl(ARGS&&... args) {
     AbortIfNotInitialized();
-    termination_initiated_.MutableUse([&](bool already_terminating) {
+    termination_initiated_.ImmutableUse([&](bool already_terminating) {
       // It's OK to just not start the thread if already in the "terminating" mode.
       if (!already_terminating) {
         std::lock_guard lock(threads_to_join_mutex_);
@@ -138,7 +140,6 @@ struct LifetimeManagerSingleton final {
   [[nodiscard]] current::WaitableAtomicSubscriberScope SubscribeToTerminationEvent(std::function<void()> f0) {
     AbortIfNotInitialized();
     // Ensures that `f0()` will only be called once, possibly from the very call to `SubscribeToTerminationEvent()`.
-    auto called = std::make_shared<current::WaitableAtomic<bool>>(false);
     auto const f = [called = std::make_shared<current::WaitableAtomic<bool>>(false), f1 = std::move(f0)]() {
       if (called->MutableUse([](bool& called_flag) {
             if (called_flag) {
@@ -183,6 +184,13 @@ struct LifetimeManagerSingleton final {
   }
 
   void ExitForReal(int exit_code = 0, std::chrono::milliseconds graceful_delay = std::chrono::seconds(2)) {
+    std::map<uint64_t, LifetimeTrackedInstance> original_still_alive = tracking_.ImmutableScopedAccessor()->still_alive;
+    std::vector<uint64_t> still_alive_ids;
+    for (auto const& e : original_still_alive) {
+      still_alive_ids.push_back(e.first);
+    }
+    auto const t0 = current::time::Now();
+
     bool const previous_value = termination_initiated_.MutableUse([](std::atomic_bool& already_terminating) {
       bool const retval = already_terminating.load();
       already_terminating = true;
@@ -195,7 +203,23 @@ struct LifetimeManagerSingleton final {
       Log("`ExitForReal()` called, initating termination sequence.");
       bool ok = false;
       tracking_.WaitFor(
-          [&ok](TrackedInstances const& trk) {
+          [this, &ok, &original_still_alive, &still_alive_ids, t0](TrackedInstances const& trk) {
+            std::vector<uint64_t> next_still_alive_ids;
+            auto const t1 = current::time::Now();
+            for (uint64_t id : still_alive_ids) {
+              auto const cit = trk.still_alive.find(id);
+              if (cit == std::end(trk.still_alive)) {
+                auto const& e = original_still_alive[id];
+                Log(current::strings::Printf("Gone after %.3lfs: %s @ %s:%d",
+                                             1e-6 * (t1 - t0).count(),
+                                             e.description.c_str(),
+                                             e.file_basename.c_str(),
+                                             e.line_as_number));
+              } else {
+                next_still_alive_ids.push_back(id);
+              }
+            }
+            still_alive_ids = std::move(next_still_alive_ids);
             if (trk.still_alive.empty()) {
               ok = true;
               return true;
@@ -263,7 +287,9 @@ struct LifetimeManagerSingleton final {
 // Returns the `[[nodiscard]]`-ed scope for the lifetime of the passed-in lambda being registered.
 #define LIFETIME_NOTIFY_OF_SHUTDOWN(f) LIFETIME_MANAGER_SINGLETON_IMPL().SubscribeToTerminationEvent(f)
 
-// TODO(dkorolev): Refactor this.
+// Waits forever. Useful for "singleton" threads and in `popen2()` runners for what should run forever.
+#define LIFETIME_SLEEP_UNTIL_SHUTDOWN(f) LIFETIME_MANAGER_SINGLETON_IMPL().WaitUntilTimeToDie()
+
 #define LIFETIME_TRACKED_DEBUG_DUMP(...) LIFETIME_MANAGER_SINGLETON_IMPL().DumpActive(__VA_ARGS__)
 
 inline void LIFETIME_MANAGER_EXIT(int code = 0, std::chrono::milliseconds graceful_delay = std::chrono::seconds(2)) {
@@ -273,22 +299,22 @@ inline void LIFETIME_MANAGER_EXIT(int code = 0, std::chrono::milliseconds gracef
 // This is a bit of a "singleton instance" creator.
 // Not recommended to use overall, as it would create one thread per instance,
 // as opposed to "a single thread to own them all". But okay for the test and for quick experiments.
-// TODO(dkorolev): The same semantics could be used to leverage that "single thread to own them all".
+// TODO(dkorolev): One day the same semantics could be used to leverage that "single thread to own them all".
 template <class T, class... ARGS>
 T& CreateLifetimeTrackedInstance(char const* file, int line, std::string const& text, ARGS&&... args) {
   current::WaitableAtomic<T*> result(nullptr);
   // Construct in a dedicated thread, so that when it's time to destruct the destructors do not block one another!
-  auto& s = LIFETIME_MANAGER_SINGLETON_IMPL();
-  s.EmplaceThreadImpl([&]() {
+  auto& mgr = LIFETIME_MANAGER_SINGLETON_IMPL();
+  mgr.EmplaceThreadImpl([&]() {
     size_t const id = [&]() {
       T instance(std::forward<ARGS>(args)...);
       // Must ensure the thread registers its lifetime and respects the termination signal.
-      size_t const id = s.TrackingAdd(text, file, line);
+      size_t const id = mgr.TrackingAdd(text, file, line);
       result.SetValue(&instance);
-      s.WaitUntilTimeToDie();
+      mgr.WaitUntilTimeToDie();
       return id;
     }();
-    s.TrackingRemove(id);
+    mgr.TrackingRemove(id);
   });
   result.Wait([](T const* ptr) { return ptr != nullptr; });
   return *result.GetValue();
@@ -299,12 +325,12 @@ T& CreateLifetimeTrackedInstance(char const* file, int line, std::string const& 
 // TODO(dkorolev): Maybe make this into a variadic macro to allow passing arguments to this thread in a C+-native way.
 // NOTE(dkorolev): Ensure that the thread body registers its lifetime to the singleton manager,
 //                 to eliminate the risk of this thread being `.join()`-ed before it is fully done.
-#define LIFETIME_TRACKED_THREAD(desc, body)                    \
-  LIFETIME_MANAGER_SINGLETON_IMPL().EmplaceThreadImpl([&]() {  \
-    auto& s = LIFETIME_MANAGER_SINGLETON_IMPL();               \
-    size_t const id = s.TrackingAdd(desc, __FILE__, __LINE__); \
-    body();                                                    \
-    s.TrackingRemove(id);                                      \
+#define LIFETIME_TRACKED_THREAD(desc, body)                      \
+  LIFETIME_MANAGER_SINGLETON_IMPL().EmplaceThreadImpl([&]() {    \
+    auto& mgr = LIFETIME_MANAGER_SINGLETON_IMPL();               \
+    size_t const id = mgr.TrackingAdd(desc, __FILE__, __LINE__); \
+    body();                                                      \
+    mgr.TrackingRemove(id);                                      \
   })
 
 // TODO(dkorolev): This `#ifdef` is ugly, and it will get fixed once we standardize our `cmake`-based builds.
@@ -320,24 +346,28 @@ T& CreateLifetimeTrackedInstance(char const* file, int line, std::string const& 
 // It is guaranteed that SIGTERM will only be sent to the child process once.
 
 inline int LIFETIME_TRACKED_POPEN2_IMPL(
-    std::string const& txt,
+    std::string const& text,
     char const* file,
     size_t line,
     std::vector<std::string> const& cmdline,
     std::function<void(const std::string&)> cb_line,
     std::function<void(Popen2Runtime&)> cb_code = [](Popen2Runtime&) {},
     std::vector<std::string> const& env = {}) {
-  return popen2(
+  auto& mgr = LIFETIME_MANAGER_SINGLETON_IMPL();
+  size_t const id = mgr.TrackingAdd(text, file, line);
+  int const retval = popen2(
       cmdline,
       cb_line,
-      [moved_cb_code = std::move(cb_code)](Popen2Runtime& ctx) {
+      [&mgr, moved_cb_code = std::move(cb_code)](Popen2Runtime& ctx) {
         // NOTE(dkorolev): On `popen2()` level it's OK to call `.Kill()` multiple times, only one will go through.
-        auto const scope = LIFETIME_MANAGER_SINGLETON_IMPL().SubscribeToTerminationEvent([&ctx]() { ctx.Kill(); });
+        auto const scope = mgr.SubscribeToTerminationEvent([&ctx]() { ctx.Kill(); });
         moved_cb_code(ctx);
       },
       env);
+  mgr.TrackingRemove(id);
+  return retval;
 }
 
-#define LIFETIME_TRACKED_POPEN2(txt, ...) LIFETIME_TRACKED_POPEN2_IMPL(txt, __FILE__, __LINE__, __VA_ARGS__)
+#define LIFETIME_TRACKED_POPEN2(text, ...) LIFETIME_TRACKED_POPEN2_IMPL(text, __FILE__, __LINE__, __VA_ARGS__)
 
 #endif  // C5T_POPEN2_H_INCLUDED
