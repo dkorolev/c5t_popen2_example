@@ -107,8 +107,7 @@ struct LifetimeManagerSingleton final {
 
   [[nodiscard]] current::WaitableAtomicSubscriberScope SubscribeToTerminationEvent(std::function<void()> f) {
     AbortIfNotInitialized();
-    // Ensures that `f()` will only be called once, possibly right from the very call to `SubscribeToTerminationEvent()`
-    // .
+    // Ensures that `f()` will only be called once, possibly from the very call to `SubscribeToTerminationEvent()`.
     size_t const unique_id = exactly_once_subscribers_.MutableUse([](EnsureExactlyOnce& safety) {
       uint64_t const id = safety.next_id_desc;
       safety.still_active.insert(id);
