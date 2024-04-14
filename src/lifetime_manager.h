@@ -21,14 +21,6 @@ struct LifetimeManagerSingleton final {
     std::map<uint64_t, std::string> still_alive;
   };
 
-  // The `EnsureExactlyOnce` waitable atomic is only used by `SubscribeToTerminationEvent` scopes.
-  // It can not be merged with `TrackedInstances`, since `TrackedInstances` MUST be waited at termination,
-  // while `SubscribeToTerminationEvent` subscribers SHOULD "just" be notified not more than once each.
-  struct EnsureExactlyOnce final {
-    uint64_t next_exactly_once_id = 0u;
-    std::set<uint64_t> still_active;
-  };
-
   std::atomic_bool initialized_;
 
   mutable std::mutex logger_mutex_;
@@ -38,7 +30,6 @@ struct LifetimeManagerSingleton final {
   std::atomic_bool& termination_initiated_atomic_;
 
   current::WaitableAtomic<TrackedInstances> tracking_;
-  current::WaitableAtomic<EnsureExactlyOnce> exactly_once_subscribers_;
 
   std::vector<std::thread> threads_to_join_;
   std::mutex threads_to_join_mutex_;
@@ -107,33 +98,27 @@ struct LifetimeManagerSingleton final {
     });
   }
 
-  [[nodiscard]] current::WaitableAtomicSubscriberScope SubscribeToTerminationEvent(std::function<void()> f) {
+  [[nodiscard]] current::WaitableAtomicSubscriberScope SubscribeToTerminationEvent(std::function<void()> f0) {
     AbortIfNotInitialized();
-    // Ensures that `f()` will only be called once, possibly from the very call to `SubscribeToTerminationEvent()`.
-    size_t const unique_id = exactly_once_subscribers_.MutableUse([](EnsureExactlyOnce& safety) {
-      uint64_t const id = safety.next_exactly_once_id;
-      safety.still_active.insert(id);
-      ++safety.next_exactly_once_id;
-      return id;
-    });
-    auto const call_f_exactly_once = [this, unique_id, f]() {
-      if (exactly_once_subscribers_.MutableUse([unique_id](EnsureExactlyOnce& safety) {
-            auto it = safety.still_active.find(unique_id);
-            if (it == std::end(safety.still_active)) {
+    // Ensures that `f0()` will only be called once, possibly from the very call to `SubscribeToTerminationEvent()`.
+    auto called = std::make_shared<current::WaitableAtomic<bool>>(false);
+    auto const f = [called = std::make_shared<current::WaitableAtomic<bool>>(false), f1 = std::move(f0)]() {
+      if (called->MutableUse([](bool& called_flag) {
+            if (called_flag) {
               return false;
             } else {
-              safety.still_active.erase(it);
+              called_flag = true;
               return true;
             }
           })) {
-        f();
+        f1();
       }
     };
-    auto result = termination_initiated_.Subscribe(call_f_exactly_once);
+    auto result = termination_initiated_.Subscribe(f);
     // Here it is safe to use `termination_initiated_atomic_`, since the guarantee provided is "at least once",
     // and, coupled with the `still_active` guard, it becomes "exactly once" for `f` to be called.
     if (termination_initiated_atomic_) {
-      call_f_exactly_once();
+      f();
     }
     return result;
   }
