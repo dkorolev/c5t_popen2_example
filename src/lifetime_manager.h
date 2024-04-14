@@ -5,20 +5,48 @@
 #include <mutex>
 #include <thread>
 #include <map>
-#include <set>
 
 #include "bricks/util/singleton.h"
 #include "bricks/strings/util.h"
 #include "bricks/sync/waitable_atomic.h"
+#include "bricks/file/file.h"
 
-// TODO(dkorolev): Combine `TrackedInstances` with what needs to be notified of termination.
+struct LifetimeTrackedInstance final {
+  std::string description;
+  std::string file_fullname;
+  std::string file_basename;
+  uint32_t line;
+
+  static std::string BaseName(std::string const& s) {
+    char const* r = s.c_str();
+    for (char const* p = r; p[0] && p[1]; ++p) {
+      if (*p == current::FileSystem::GetPathSeparator()) {
+        r = p + 1;
+      }
+    }
+    return r;
+  }
+
+  LifetimeTrackedInstance() = default;
+  LifetimeTrackedInstance(std::string desc, std::string file, uint32_t line)
+      : description(std::move(desc)),
+        file_fullname(std::move(file)),
+        file_basename(BaseName(file_fullname)),
+        line(line) {
+  }
+
+  std::string ToShortString() const {
+    return description + " @ " + file_basename + ':' + current::ToString(line);
+  }
+};
+
 struct LifetimeManagerSingleton final {
   // The `TrackedInstances` waitable atomic keeps track of everything that needs to be terminated before `::exit()`.
   // If at least one tracked instance remains unfinished within the grace period, `::abort()` is performed instead.
   // As a nice benefit, for tracked instances it is also journaled when and from what FILE:LINE did they start.
   struct TrackedInstances final {
     uint64_t next_id_desc = 0u;  // Descending so that in the naturally sorted order the more recent items come first.
-    std::map<uint64_t, std::string> still_alive;
+    std::map<uint64_t, LifetimeTrackedInstance> still_alive;
   };
 
   std::atomic_bool initialized_;
@@ -69,12 +97,12 @@ struct LifetimeManagerSingleton final {
     }
   }
 
-  size_t TrackingAdd(std::string const& text, char const* file, size_t line) {
+  size_t TrackingAdd(std::string const& description, char const* file, size_t line) {
     AbortIfNotInitialized();
     return tracking_.MutableUse([=](TrackedInstances& trk) {
       uint64_t const id = trk.next_id_desc;
       --trk.next_id_desc;
-      trk.still_alive[id] = text + " @ " + file + ':' + current::ToString(line);
+      trk.still_alive[id] = LifetimeTrackedInstance(description, file, line);
       return id;
     });
   }
@@ -123,9 +151,10 @@ struct LifetimeManagerSingleton final {
     return result;
   }
 
-  void DumpActive(std::function<void(std::string const&)> f0 = nullptr) const {
+  void DumpActive(std::function<void(LifetimeTrackedInstance const&)> f0 = nullptr) const {
     AbortIfNotInitialized();
-    std::function<void(std::string const&)> f = f0 != nullptr ? f0 : [this](std::string const& s) { Log(s); };
+    std::function<void(LifetimeTrackedInstance const&)> f =
+        f0 != nullptr ? f0 : [this](LifetimeTrackedInstance const& s) { Log(s.ToShortString()); };
     tracking_.ImmutableUse([&f](TrackedInstances const& trk) {
       for (auto const& [_, s] : trk.still_alive) {
         f(s);
@@ -205,7 +234,7 @@ struct LifetimeManagerSingleton final {
         Log("`ExitForReal()` termination sequence unsuccessful, still has offenders.");
         tracking_.ImmutableUse([this](TrackedInstances const& trk) {
           for (auto const& [_, s] : trk.still_alive) {
-            Log("Offender: " + s);
+            Log("Offender: " + s.ToShortString());
           }
         });
         Log("");

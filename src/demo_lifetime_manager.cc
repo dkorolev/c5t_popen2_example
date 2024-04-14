@@ -187,9 +187,13 @@ int main(int argc, char** argv) {
     });
   }
 
+  auto const DumpLifetimeTrackedInstance = [](LifetimeTrackedInstance const& t) {
+    ThreadSafeLog("- " + t.description + " @ " + t.file_basename + ':' + current::ToString(t.line));
+  };
+
   ThreadSafeLog("");
   ThreadSafeLog("Everything started, here is what is alive as of now.");
-  LIFETIME_TRACKED_DEBUG_DUMP();
+  LIFETIME_TRACKED_DEBUG_DUMP(DumpLifetimeTrackedInstance);
   ThreadSafeLog("Sleeping for three seconds.");
   ThreadSafeLog("");
 
@@ -197,7 +201,7 @@ int main(int argc, char** argv) {
 
   ThreadSafeLog("");
   ThreadSafeLog("Sleep done, prior to terminating here is what is alive as of now.");
-  LIFETIME_TRACKED_DEBUG_DUMP();
+  LIFETIME_TRACKED_DEBUG_DUMP(DumpLifetimeTrackedInstance);
   ThreadSafeLog("");
 
   ThreadSafeLog("Assuming the main program code is done by now, invoking `LIFETIME_MANAGER_EXIT()`");
