@@ -11,7 +11,7 @@
 #include "bricks/strings/util.h"
 #include "bricks/sync/waitable_atomic.h"
 
-// TODO(dkorolev): Combine `TrackedInstances` with what needs to be notified of being killed!
+// TODO(dkorolev): Combine `TrackedInstances` with what needs to be notified of termination.
 struct LifetimeManagerSingleton final {
   struct TrackedInstances final {
     // For printing / reporting.
@@ -32,8 +32,8 @@ struct LifetimeManagerSingleton final {
   mutable std::mutex logger_mutex_;
   std::function<void(std::string const&)> logger_ = nullptr;
 
-  current::WaitableAtomic<std::atomic_bool> kill_switch_engaged_;
-  std::atomic_bool& kill_switch_engaged_atomic_;
+  current::WaitableAtomic<std::atomic_bool> termination_initiated_;
+  std::atomic_bool& termination_initiated_atomic_;
 
   current::WaitableAtomic<TrackedInstances> tracking_;
   current::WaitableAtomic<EnsureExactlyOnce> exactly_once_subscribers_;
@@ -52,8 +52,8 @@ struct LifetimeManagerSingleton final {
 
   LifetimeManagerSingleton()
       : initialized_(false),
-        kill_switch_engaged_(false),
-        kill_switch_engaged_atomic_(*kill_switch_engaged_.MutableScopedAccessor()) {
+        termination_initiated_(false),
+        termination_initiated_atomic_(*termination_initiated_.MutableScopedAccessor()) {
   }
 
   void LIFETIME_MANAGER_ACTIVATE_IMPL(std::function<void(std::string const&)> logger) {
@@ -94,16 +94,17 @@ struct LifetimeManagerSingleton final {
   template <typename... ARGS>
   void EmplaceThread(ARGS&&... args) {
     AbortIfNotInitialized();
-    if (!kill_switch_engaged_atomic_) {
+    if (!termination_initiated_atomic_) {
       // It's OK to just not start the thread if already in the "terminating" mode.
       std::lock_guard lock(threads_to_join_mutex_);
       threads_to_join_.emplace_back(std::forward<ARGS>(args)...);
     }
   }
 
-  [[nodiscard]] current::WaitableAtomicSubscriberScope SubscribeToKillSwitch(std::function<void()> f) {
+  [[nodiscard]] current::WaitableAtomicSubscriberScope SubscribeToTerminationEvent(std::function<void()> f) {
     AbortIfNotInitialized();
-    // Ensures that `f()` will only be called once, possibly right from the very call to `SubscribeToKillSwitch()` .
+    // Ensures that `f()` will only be called once, possibly right from the very call to `SubscribeToTerminationEvent()`
+    // .
     size_t const unique_id = exactly_once_subscribers_.MutableUse([](EnsureExactlyOnce& safety) {
       uint64_t const id = safety.next_id_desc;
       safety.still_active.insert(id);
@@ -123,8 +124,8 @@ struct LifetimeManagerSingleton final {
         f();
       }
     };
-    auto result = kill_switch_engaged_.Subscribe(call_f_exactly_once);
-    if (kill_switch_engaged_atomic_) {
+    auto result = termination_initiated_.Subscribe(call_f_exactly_once);
+    if (termination_initiated_atomic_) {
       call_f_exactly_once();
     }
     return result;
@@ -142,17 +143,17 @@ struct LifetimeManagerSingleton final {
 
   void WaitUntilTimeToDie() const {
     // This function is only useful when called from a thread in the scope of important data was created.
-    // Generally, this is the way to create kill-switch-friendly singleton instances:
+    // Generally, this is the way to create lifetime-manager-friendly singleton instances:
     // 1) Spawn a thread.
     // 2) Create everything in it, preferably as `Owned<WaitableAtomic<...>>`.
     // 3) At the end of this thread wait until it is time to die.
     // 4) Once it is time to die, everything this thread has created will be destroyed, gracefully or forcefully.
     AbortIfNotInitialized();
-    kill_switch_engaged_.Wait([](bool die) { return die; });
+    termination_initiated_.Wait([](bool die) { return die; });
   }
 
   void ExitForReal(int exit_code = 0, std::chrono::milliseconds graceful_delay = std::chrono::seconds(2)) {
-    bool const previous_value = kill_switch_engaged_.MutableUse([](std::atomic_bool& b) {
+    bool const previous_value = termination_initiated_.MutableUse([](std::atomic_bool& b) {
       bool const retval = b.load();
       b = true;
       return retval;
@@ -204,10 +205,10 @@ struct LifetimeManagerSingleton final {
 #define LIFETIME_MANAGER_ACTIVATE(logger) LIFETIME_MANAGER_SINGLETON().LIFETIME_MANAGER_ACTIVATE_IMPL(logger)
 
 // O(1), just `.load()`-s the atomic.
-#define LIFETIME_SHUTTING_DOWN LIFETIME_MANAGER_SINGLETON().kill_switch_engaged_atomic_
+#define LIFETIME_SHUTTING_DOWN LIFETIME_MANAGER_SINGLETON().termination_initiated_atomic_
 
 // Returns the `[[nodiscard]]`-ed scope for the lifetime of the passed-in lambda being registered.
-#define LIFETIME_NOTIFY_OF_SHUTDOWN(f) LIFETIME_MANAGER_SINGLETON().SubscribeToKillSwitch(f)
+#define LIFETIME_NOTIFY_OF_SHUTDOWN(f) LIFETIME_MANAGER_SINGLETON().SubscribeToTerminationEvent(f)
 
 // TODO(dkorolev): Refactor this.
 #define LIFETIME_TRACKED_DEBUG_DUMP() LIFETIME_MANAGER_SINGLETON().DumpActive()
@@ -272,14 +273,11 @@ T& LifetimeConstructObject(std::string const& text, char const* file, int line, 
 // NOTE(dkorolev): `LIFETIME_TRACKED_POPEN2` extrends the "vanilla" `popen2()` in two ways.
 //
 // 1) The user provides the "display name" for the inner graceful "task manager" to report what is running, and
+// 2) The lifetime managers takes the liberty to send SIGTERM to the child process once termination is initated.
 //
-// 2) The `kill()` parameter is no longer an `std::function<void()>` but `GracefulPopen2Killer`, which can be
-//    both invoked with `operator()` and checked in an `if()` via its `operator bool()`.
-//
-// It is still up to the user to exit from the callback function that can `write()`, but
-// the `LIFETIME_TRACKED_POPEN2` wrapper will ensure that once the kill switch is activated
-// the original "kill-child-by-pid"` mechanism will be triggered activated without user intervention.
-// The user, of course, is allowed to kill the child manually if and when needed.
+// It is still up to the user to exit from the callback function that can `write()` into the child process.
+// The user can, of course, send SIGTERM to the child process via the "native" `popen2()`-provided means.
+// It is guaranteed that SIGTERM will only be sent to the child process once.
 
 inline int LIFETIME_TRACKED_POPEN2_IMPL(
     std::string const& txt,
@@ -294,7 +292,7 @@ inline int LIFETIME_TRACKED_POPEN2_IMPL(
       cb_line,
       [moved_cb_code = std::move(cb_code)](Popen2Runtime& ctx) {
         // NOTE(dkorolev): On `popen2()` level it's OK to call `.Kill()` multiple times, only one will go through.
-        auto const kill_switch_scope = LIFETIME_MANAGER_SINGLETON().SubscribeToKillSwitch([&ctx]() { ctx.Kill(); });
+        auto const scope = LIFETIME_MANAGER_SINGLETON().SubscribeToTerminationEvent([&ctx]() { ctx.Kill(); });
         moved_cb_code(ctx);
       },
       env);
