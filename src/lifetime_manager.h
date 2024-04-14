@@ -91,14 +91,18 @@ struct LifetimeManagerSingleton final {
   }
 
   // To run "global" threads instead of `.detach()`-ing them: these threads will be `.join()`-ed upon termination.
+  // This function is internal, and it assumes that the provided thread itself respects the termination signal.
+  // (There is a mechanism to guard against this too, with the second possible `::abort()` clause, but still.)
   template <typename... ARGS>
-  void EmplaceThread(ARGS&&... args) {
+  void EmplaceThreadImpl(ARGS&&... args) {
     AbortIfNotInitialized();
-    if (!termination_initiated_atomic_) {
+    termination_initiated_.MutableUse([&](bool already_terminating) {
       // It's OK to just not start the thread if already in the "terminating" mode.
-      std::lock_guard lock(threads_to_join_mutex_);
-      threads_to_join_.emplace_back(std::forward<ARGS>(args)...);
-    }
+      if (!already_terminating) {
+        std::lock_guard lock(threads_to_join_mutex_);
+        threads_to_join_.emplace_back(std::forward<ARGS>(args)...);
+      }
+    });
   }
 
   [[nodiscard]] current::WaitableAtomicSubscriberScope SubscribeToTerminationEvent(std::function<void()> f) {
@@ -125,6 +129,8 @@ struct LifetimeManagerSingleton final {
       }
     };
     auto result = termination_initiated_.Subscribe(call_f_exactly_once);
+    // Here it is safe to use `termination_initiated_atomic_`, since the guarantee provided is "at least once",
+    // and, coupled with the `still_active` guard, it becomes "exactly once" for `f` to be called.
     if (termination_initiated_atomic_) {
       call_f_exactly_once();
     }
@@ -153,16 +159,16 @@ struct LifetimeManagerSingleton final {
   }
 
   void ExitForReal(int exit_code = 0, std::chrono::milliseconds graceful_delay = std::chrono::seconds(2)) {
-    bool const previous_value = termination_initiated_.MutableUse([](std::atomic_bool& b) {
-      bool const retval = b.load();
-      b = true;
+    bool const previous_value = termination_initiated_.MutableUse([](std::atomic_bool& already_terminating) {
+      bool const retval = already_terminating.load();
+      already_terminating = true;
       return retval;
     });
 
     if (previous_value) {
       Log("Ignoring a consecutive call to `ExitForReal()`.");
     } else {
-      Log("`ExitForReal()` called for the first time, initating termination sequence.");
+      Log("`ExitForReal()` called, initating termination sequence.");
       bool ok = false;
       tracking_.WaitFor(
           [&ok](TrackedInstances const& trk) {
@@ -175,16 +181,39 @@ struct LifetimeManagerSingleton final {
           },
           graceful_delay);
       if (ok) {
-        Log("`ExitForReal()` termination sequence successful, joining the threads.");
+        Log("`ExitForReal()` termination sequence successful, joining the presumably-done threads.");
         std::vector<std::thread> threads_to_join = [this]() {
           std::lock_guard lock(threads_to_join_mutex_);
           return std::move(threads_to_join_);
         }();
-        for (auto& t : threads_to_join) {
-          t.join();
+        current::WaitableAtomic<bool> threads_joined_successfully(false);
+        std::thread threads_joiner([&threads_to_join, &threads_joined_successfully]() {
+          for (auto& t : threads_to_join) {
+            t.join();
+          }
+          threads_joined_successfully.SetValue(true);
+        });
+        bool need_to_abort_because_threads_are_not_all_joined = true;
+        threads_joined_successfully.WaitFor(
+            [&need_to_abort_because_threads_are_not_all_joined](bool b) {
+              if (b) {
+                need_to_abort_because_threads_are_not_all_joined = false;
+                return true;
+              } else {
+                return false;
+              }
+            },
+            graceful_delay);
+        if (!need_to_abort_because_threads_are_not_all_joined) {
+          Log("`ExitForReal()` termination sequence successful, all threads joined.");
+          threads_joiner.join();
+          Log("`ExitForReal()` termination sequence successful, all done.");
+          ::exit(exit_code);
+        } else {
+          Log("");
+          Log("`ExitForReal()` uncooperative threads remain, time to `abort()`.");
+          ::abort();
         }
-        Log("`ExitForReal()` termination sequence successful, all done.");
-        ::exit(exit_code);
       } else {
         Log("");
         Log("`ExitForReal()` termination sequence unsuccessful, still has offenders.");
@@ -201,21 +230,20 @@ struct LifetimeManagerSingleton final {
   }
 };
 
-#define LIFETIME_MANAGER_SINGLETON() current::Singleton<LifetimeManagerSingleton>()
-#define LIFETIME_MANAGER_ACTIVATE(logger) LIFETIME_MANAGER_SINGLETON().LIFETIME_MANAGER_ACTIVATE_IMPL(logger)
+#define LIFETIME_MANAGER_SINGLETON_IMPL() current::Singleton<LifetimeManagerSingleton>()
+#define LIFETIME_MANAGER_ACTIVATE(logger) LIFETIME_MANAGER_SINGLETON_IMPL().LIFETIME_MANAGER_ACTIVATE_IMPL(logger)
 
 // O(1), just `.load()`-s the atomic.
-#define LIFETIME_SHUTTING_DOWN LIFETIME_MANAGER_SINGLETON().termination_initiated_atomic_
+#define LIFETIME_SHUTTING_DOWN LIFETIME_MANAGER_SINGLETON_IMPL().termination_initiated_atomic_
 
 // Returns the `[[nodiscard]]`-ed scope for the lifetime of the passed-in lambda being registered.
-#define LIFETIME_NOTIFY_OF_SHUTDOWN(f) LIFETIME_MANAGER_SINGLETON().SubscribeToTerminationEvent(f)
+#define LIFETIME_NOTIFY_OF_SHUTDOWN(f) LIFETIME_MANAGER_SINGLETON_IMPL().SubscribeToTerminationEvent(f)
 
 // TODO(dkorolev): Refactor this.
-#define LIFETIME_TRACKED_DEBUG_DUMP() LIFETIME_MANAGER_SINGLETON().DumpActive()
+#define LIFETIME_TRACKED_DEBUG_DUMP(...) LIFETIME_MANAGER_SINGLETON_IMPL().DumpActive(__VA_ARGS__)
 
-inline void LIFETIME_MANAGER_EXIT(int exit_code = 0,
-                                  std::chrono::milliseconds graceful_delay = std::chrono::seconds(2)) {
-  LIFETIME_MANAGER_SINGLETON().ExitForReal(exit_code, graceful_delay);
+inline void LIFETIME_MANAGER_EXIT(int code = 0, std::chrono::milliseconds graceful_delay = std::chrono::seconds(2)) {
+  LIFETIME_MANAGER_SINGLETON_IMPL().ExitForReal(code, graceful_delay);
 }
 
 // This is a bit of a "singleton instance" creator.
@@ -226,10 +254,11 @@ template <class T, class... ARGS>
 T& CreateLifetimeTrackedInstance(char const* file, int line, std::string const& text, ARGS&&... args) {
   current::WaitableAtomic<T*> result(nullptr);
   // Construct in a dedicated thread, so that when it's time to destruct the destructors do not block one another!
-  auto& s = LIFETIME_MANAGER_SINGLETON();
-  s.EmplaceThread([&]() {
+  auto& s = LIFETIME_MANAGER_SINGLETON_IMPL();
+  s.EmplaceThreadImpl([&]() {
     size_t const id = [&]() {
       T instance(std::forward<ARGS>(args)...);
+      // Must ensure the thread registers its lifetime and respects the termination signal.
       size_t const id = s.TrackingAdd(text, file, line);
       result.SetValue(&instance);
       s.WaitUntilTimeToDie();
@@ -243,15 +272,18 @@ T& CreateLifetimeTrackedInstance(char const* file, int line, std::string const& 
 
 #define LIFETIME_TRACKED_INSTANCE(type, ...) CreateLifetimeTrackedInstance<type>(__FILE__, __LINE__, __VA_ARGS__)
 
-// TODO(dkorolev): May make this into a variadic macro to allow passing arguments to this thread in a C+-native way.
+// TODO(dkorolev): Maybe make this into a variadic macro to allow passing arguments to this thread in a C+-native way.
+// NOTE(dkorolev): Ensure that the thread body registers its lifetime to the singleton manager,
+//                 to eliminate the risk of this thread being `.join()`-ed before it is fully done.
 #define LIFETIME_TRACKED_THREAD(desc, body)                    \
-  LIFETIME_MANAGER_SINGLETON().EmplaceThread([&]() {           \
-    auto& s = LIFETIME_MANAGER_SINGLETON();                    \
+  LIFETIME_MANAGER_SINGLETON_IMPL().EmplaceThreadImpl([&]() {  \
+    auto& s = LIFETIME_MANAGER_SINGLETON_IMPL();               \
     size_t const id = s.TrackingAdd(desc, __FILE__, __LINE__); \
     body();                                                    \
     s.TrackingRemove(id);                                      \
   })
 
+// TODO(dkorolev): This `#ifdef` is ugly, and it will get fixed once we standardize our `cmake`-based builds.
 #ifdef C5T_POPEN2_H_INCLUDED
 
 // NOTE(dkorolev): `LIFETIME_TRACKED_POPEN2` extrends the "vanilla" `popen2()` in two ways.
@@ -276,7 +308,7 @@ inline int LIFETIME_TRACKED_POPEN2_IMPL(
       cb_line,
       [moved_cb_code = std::move(cb_code)](Popen2Runtime& ctx) {
         // NOTE(dkorolev): On `popen2()` level it's OK to call `.Kill()` multiple times, only one will go through.
-        auto const scope = LIFETIME_MANAGER_SINGLETON().SubscribeToTerminationEvent([&ctx]() { ctx.Kill(); });
+        auto const scope = LIFETIME_MANAGER_SINGLETON_IMPL().SubscribeToTerminationEvent([&ctx]() { ctx.Kill(); });
         moved_cb_code(ctx);
       },
       env);
