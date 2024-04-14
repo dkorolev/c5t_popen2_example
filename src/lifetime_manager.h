@@ -11,18 +11,6 @@
 #include "bricks/strings/util.h"
 #include "bricks/sync/waitable_atomic.h"
 
-// TODO(dkorolev): Refactor this.
-inline void SafeStderr(std::string const& s) {
-  static std::mutex m;
-  std::lock_guard lock(m);
-  std::cerr << s << std::endl;
-}
-
-// TODO(dkorolev): Refactor this.
-inline void DumpActiveToStderr(std::string const& s) {
-  SafeStderr("Active: " + s);
-}
-
 // TODO(dkorolev): Combine `TrackedInstances` with what needs to be notified of being killed!
 struct LifetimeManagerSingleton final {
   struct TrackedInstances final {
@@ -41,6 +29,9 @@ struct LifetimeManagerSingleton final {
 
   std::atomic_bool initialized_;
 
+  mutable std::mutex logger_mutex_;
+  std::function<void(std::string const&)> logger_ = nullptr;
+
   current::WaitableAtomic<std::atomic_bool> kill_switch_engaged_;
   std::atomic_bool& kill_switch_engaged_atomic_;
 
@@ -50,24 +41,37 @@ struct LifetimeManagerSingleton final {
   std::vector<std::thread> threads_to_join_;
   std::mutex threads_to_join_mutex_;
 
+  void Log(std::string const& s) const {
+    std::lock_guard lock(logger_mutex_);
+    if (logger_) {
+      logger_(s);
+    } else {
+      std::cerr << "LIFETIME_MANAGER_LOG: " << s << std::endl;
+    }
+  }
+
   LifetimeManagerSingleton()
       : initialized_(false),
         kill_switch_engaged_(false),
         kill_switch_engaged_atomic_(*kill_switch_engaged_.MutableScopedAccessor()) {
   }
 
-  void MarkAsInitialized() {
+  void LIFETIME_MANAGER_ACTIVATE_IMPL(std::function<void(std::string const&)> logger) {
     bool const was_initialized = initialized_;
     initialized_ = true;
+    {
+      std::lock_guard lock(logger_mutex_);
+      logger_ = logger;
+    }
     if (was_initialized) {
-      SafeStderr("Called `MarkAsInitialized()` twice, aborting.");
+      Log("Called `LIFETIME_MANAGER_ACTIVATE()` twice, aborting.");
       ::abort();
     }
   }
 
   void AbortIfNotInitialized() const {
     if (!initialized_) {
-      SafeStderr("Was not `MarkAsInitialized()`, aborting.");
+      Log("Was not `LIFETIME_MANAGER_ACTIVATE()`, aborting.");
       ::abort();
     }
   }
@@ -126,8 +130,9 @@ struct LifetimeManagerSingleton final {
     return result;
   }
 
-  void DumpActive(std::function<void(std::string const&)> f = DumpActiveToStderr) const {
+  void DumpActive(std::function<void(std::string const&)> f0 = nullptr) const {
     AbortIfNotInitialized();
+    std::function<void(std::string const&)> f = f0 != nullptr ? f0 : [this](std::string const& s) { Log(s); };
     tracking_.ImmutableUse([&f](TrackedInstances const& trk) {
       for (auto const& [_, s] : trk.still_alive) {
         f(s);
@@ -154,9 +159,9 @@ struct LifetimeManagerSingleton final {
     });
 
     if (previous_value) {
-      SafeStderr("Ignoring a consecutive call to `ExitForReal()`.");
+      Log("Ignoring a consecutive call to `ExitForReal()`.");
     } else {
-      SafeStderr("`ExitForReal()` called for the first time, initating termination sequence.");
+      Log("`ExitForReal()` called for the first time, initating termination sequence.");
       bool ok = false;
       tracking_.WaitFor(
           [&ok](TrackedInstances const& trk) {
@@ -169,7 +174,7 @@ struct LifetimeManagerSingleton final {
           },
           graceful_delay);
       if (ok) {
-        SafeStderr("`ExitForReal()` termination sequence successful, joining the threads.");
+        Log("`ExitForReal()` termination sequence successful, joining the threads.");
         std::vector<std::thread> threads_to_join = [this]() {
           std::lock_guard lock(threads_to_join_mutex_);
           return std::move(threads_to_join_);
@@ -177,16 +182,18 @@ struct LifetimeManagerSingleton final {
         for (auto& t : threads_to_join) {
           t.join();
         }
-        SafeStderr("`ExitForReal()` termination sequence successful, all done.");
+        Log("`ExitForReal()` termination sequence successful, all done.");
         ::exit(exit_code);
       } else {
-        SafeStderr("\n`ExitForReal()` termination sequence unsuccessful, still has offenders.");
-        tracking_.ImmutableUse([](TrackedInstances const& trk) {
+        Log("");
+        Log("`ExitForReal()` termination sequence unsuccessful, still has offenders.");
+        tracking_.ImmutableUse([this](TrackedInstances const& trk) {
           for (auto const& [_, s] : trk.still_alive) {
-            SafeStderr("Offender: " + s);
+            Log("Offender: " + s);
           }
         });
-        SafeStderr("\n`ExitForReal()` time to `abort()`.");
+        Log("");
+        Log("`ExitForReal()` time to `abort()`.");
         ::abort();
       }
     }
@@ -194,7 +201,7 @@ struct LifetimeManagerSingleton final {
 };
 
 #define LIFETIME_MANAGER_SINGLETON() current::Singleton<LifetimeManagerSingleton>()
-#define LIFETIME_MANAGER_ACTIVATE() LIFETIME_MANAGER_SINGLETON().MarkAsInitialized()
+#define LIFETIME_MANAGER_ACTIVATE(logger) LIFETIME_MANAGER_SINGLETON().LIFETIME_MANAGER_ACTIVATE_IMPL(logger)
 
 // O(1), just `.load()`-s the atomic.
 #define LIFETIME_SHUTTING_DOWN LIFETIME_MANAGER_SINGLETON().kill_switch_engaged_atomic_

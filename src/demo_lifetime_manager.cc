@@ -1,3 +1,4 @@
+#include <mutex>
 #include "bricks/sync/waitable_atomic.h"
 #include "popen2.h"
 #include "lifetime_manager.h"
@@ -8,6 +9,12 @@ DEFINE_bool(
     true,
     "Set to `false` to not start anything uncooperative, so that the code `exit(0)`-s instead of `abort()`-ing.");
 
+inline static std::mutex output_mutex;
+inline void ThreadSafeLog(std::string const& s) {
+  std::lock_guard lock(output_mutex);
+  std::cout << s << std::endl;
+}
+
 // This lifetime-aware object will destruct gracefully.
 struct CooperativeSlowlyDeletingObject final {
   int const value_;
@@ -15,57 +22,61 @@ struct CooperativeSlowlyDeletingObject final {
   CooperativeSlowlyDeletingObject() = delete;
   explicit CooperativeSlowlyDeletingObject(int value) : value_(value) {
     // Demonstrate that `CooperativeSlowlyDeletingObject` is friendly with constructor arguments.
-    SafeStderr("CooperativeSlowlyDeletingObject created.");
+    ThreadSafeLog("CooperativeSlowlyDeletingObject created.");
   }
 
   ~CooperativeSlowlyDeletingObject() {
-    SafeStderr("Deleting the CooperativeSlowlyDeletingObject.");
-    SafeStderr("CooperativeSlowlyDeletingObject deleted.");
+    ThreadSafeLog("Deleting the CooperativeSlowlyDeletingObject.");
+    ThreadSafeLog("CooperativeSlowlyDeletingObject deleted.");
   }
   void Dump() const {
-    SafeStderr("CooperativeSlowlyDeletingObject::value_ == " + current::ToString(value_));
+    ThreadSafeLog("CooperativeSlowlyDeletingObject::value_ == " + current::ToString(value_));
   }
 };
 
 // This lifetime-aware object will destruct gracefully.
 struct SemiCooperativeSlowlyDeletingObject final {
   SemiCooperativeSlowlyDeletingObject() {
-    SafeStderr("SemiCooperativeSlowlyDeletingObject created.");
+    ThreadSafeLog("SemiCooperativeSlowlyDeletingObject created.");
   }
 
   ~SemiCooperativeSlowlyDeletingObject() {
-    SafeStderr("Deleting the SemiCooperativeSlowlyDeletingObject.");
+    ThreadSafeLog("Deleting the SemiCooperativeSlowlyDeletingObject.");
     std::this_thread::sleep_for(std::chrono::milliseconds(250));
-    SafeStderr("SemiCooperativeSlowlyDeletingObject deleted.");
+    ThreadSafeLog("SemiCooperativeSlowlyDeletingObject deleted.");
   }
 
   void Dump() const {
-    SafeStderr("SemiCooperativeSlowlyDeletingObject is alive.");
+    ThreadSafeLog("SemiCooperativeSlowlyDeletingObject is alive.");
   }
 };
 
 // This long-to-destruct object will force `abort()`, since the graceful shutdown delay is way under ten seconds.
 struct NonCooperativeSlowlyDeletingObject final {
   NonCooperativeSlowlyDeletingObject() {
-    SafeStderr("NonCooperativeSlowlyDeletingObject created.");
+    ThreadSafeLog("NonCooperativeSlowlyDeletingObject created.");
   }
 
   ~NonCooperativeSlowlyDeletingObject() {
-    SafeStderr("Deleting the NonCooperativeSlowlyDeletingObject.");
+    ThreadSafeLog("Deleting the NonCooperativeSlowlyDeletingObject.");
     // 60 seconds is beyond the reasonable graceful shutdown wait time.
     std::this_thread::sleep_for(std::chrono::seconds(60));
-    SafeStderr("[ SHOULD NOT SEE THIS ] NonCooperativeSlowlyDeletingObject deleted.");
+    ThreadSafeLog("[ SHOULD NOT SEE THIS ] NonCooperativeSlowlyDeletingObject deleted.");
   }
 
   void Dump() const {
-    SafeStderr("NonCooperativeSlowlyDeletingObject is alive.");
+    ThreadSafeLog("NonCooperativeSlowlyDeletingObject is alive.");
   }
 };
 
 int main(int argc, char** argv) {
   ParseDFlags(&argc, &argv);
 
-  LIFETIME_MANAGER_ACTIVATE();
+  // The lifetime manager ensures the log functions are called in the thread-safe way.
+  LIFETIME_MANAGER_ACTIVATE([](std::string const& s) {
+    std::lock_guard lock(output_mutex);
+    std::cerr << "MGR: " << s << std::endl;
+  });
 
   auto const SmallDelay = []() {
     // Just so that the terminal output comes in predictable order, since there are `bash` invocations involved.
@@ -93,7 +104,7 @@ int main(int argc, char** argv) {
     size_t i = 0;
     bool truly_done = false;
     while (!truly_done) {
-      SafeStderr("long super-cooperative " + current::ToString(++i));
+      ThreadSafeLog("long super-cooperative " + current::ToString(++i));
       done.WaitFor(
           [&truly_done](bool b) {
             if (b) {
@@ -105,7 +116,7 @@ int main(int argc, char** argv) {
           },
           std::chrono::milliseconds(250));
     }
-    SafeStderr("long super-cooperative shutting down");
+    ThreadSafeLog("long super-cooperative shutting down");
   });
   SmallDelay();
 
@@ -114,12 +125,12 @@ int main(int argc, char** argv) {
     size_t i = 0;
     while (true) {
       if (LIFETIME_SHUTTING_DOWN) {
-        SafeStderr("long semi-cooperative wait before shutting down");
+        ThreadSafeLog("long semi-cooperative wait before shutting down");
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
-        SafeStderr("long semi-cooperative shutting down");
+        ThreadSafeLog("long semi-cooperative shutting down");
         break;
       } else {
-        SafeStderr("long semi-cooperative " + current::ToString(++i));
+        ThreadSafeLog("long semi-cooperative " + current::ToString(++i));
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
       }
     }
@@ -132,13 +143,13 @@ int main(int argc, char** argv) {
       size_t i = 0;
       while (true) {
         if (LIFETIME_SHUTTING_DOWN) {
-          SafeStderr("long non-cooperative wait FOREVER=60s before shutting down");
+          ThreadSafeLog("long non-cooperative wait FOREVER=60s before shutting down");
           // 60 seconds is beyond the reasonable graceful shutdown wait time.
           std::this_thread::sleep_for(std::chrono::seconds(60));
-          SafeStderr("long non-cooperative shutting down, but you will not see this =)");
+          ThreadSafeLog("long non-cooperative shutting down, but you will not see this =)");
           break;
         } else {
-          SafeStderr("long non-cooperative " + current::ToString(++i));
+          ThreadSafeLog("long non-cooperative " + current::ToString(++i));
           std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
       }
@@ -150,7 +161,7 @@ int main(int argc, char** argv) {
     LIFETIME_TRACKED_POPEN2(
         "popen2 running bash #1",
         {"bash", "-c", "(for i in $(seq 101 109); do echo $i; sleep 1; done)"},
-        [](std::string const& line) { SafeStderr("bash #1: " + line); },
+        [](std::string const& line) { ThreadSafeLog("bash #1: " + line); },
         [](Popen2Runtime&) {
           // No (extra) work to do inside this `LIFETIME_TRACKED_POPEN2`, it will be gracefull shut down automatically.
         });
@@ -162,7 +173,7 @@ int main(int argc, char** argv) {
     LIFETIME_TRACKED_POPEN2(
         "popen2 running bash #2",
         {"bash", "-c", "trap 'sleep 0.5; echo BYE; exit' SIGTERM; for i in $(seq 201 209); do echo $i; sleep 1; done"},
-        [](std::string const& line) { SafeStderr("bash #2: " + line); });
+        [](std::string const& line) { ThreadSafeLog("bash #2: " + line); });
   });
   SmallDelay();
 
@@ -172,26 +183,26 @@ int main(int argc, char** argv) {
       LIFETIME_TRACKED_POPEN2(
           "[ NOT COOPERATIVE! ] popen2 running bash #3",
           {"bash", "-c", "trap 'echo REFUSING_TO_DIE' SIGTERM; for i in $(seq 301 309); do echo $i; sleep 1; done"},
-          [](std::string const& line) { SafeStderr("bash #3: " + line); });
+          [](std::string const& line) { ThreadSafeLog("bash #3: " + line); });
     });
   }
 
-  SafeStderr("");
-  SafeStderr("Everything started, here is what is alive as of now.");
+  ThreadSafeLog("");
+  ThreadSafeLog("Everything started, here is what is alive as of now.");
   LIFETIME_TRACKED_DEBUG_DUMP();
-  SafeStderr("Sleeping for three seconds.");
-  SafeStderr("");
+  ThreadSafeLog("Sleeping for three seconds.");
+  ThreadSafeLog("");
 
   std::this_thread::sleep_for(std::chrono::seconds(3));
 
-  SafeStderr("");
-  SafeStderr("Sleep done, prior to terminating here is what is alive as of now.");
+  ThreadSafeLog("");
+  ThreadSafeLog("Sleep done, prior to terminating here is what is alive as of now.");
   LIFETIME_TRACKED_DEBUG_DUMP();
-  SafeStderr("");
+  ThreadSafeLog("");
 
-  SafeStderr("Assuming the main program code is done by now, invoking `LIFETIME_MANAGER_EXIT()`");
-  SafeStderr("");
+  ThreadSafeLog("Assuming the main program code is done by now, invoking `LIFETIME_MANAGER_EXIT()`");
+  ThreadSafeLog("");
   LIFETIME_MANAGER_EXIT(0);  // This will make the program terminate, one way or another, right away or after a delay.
 
-  SafeStderr("[ SHOULD NOT SEE THIS ] Eeached the end of `main()`.");
+  ThreadSafeLog("[ SHOULD NOT SEE THIS ] Eeached the end of `main()`.");
 }
