@@ -162,7 +162,7 @@ int main(int argc, char** argv) {
   LIFETIME_TRACKED_THREAD("thread to run bash #1", []() {
     LIFETIME_TRACKED_POPEN2(
         "popen2 running bash #1",
-        {"bash", "-c", "(for i in $(seq 101 109); do echo $i; sleep 0.25; done)"},
+        {"bash", "-c", "(for i in $(seq 101 199); do echo $i; sleep 0.25; done)"},
         [](std::string const& line) { ThreadSafeLog("bash #1: " + line); },
         [](Popen2Runtime&) {
           // No (extra) work to do inside this `LIFETIME_TRACKED_POPEN2`, it will be gracefull shut down automatically.
@@ -174,7 +174,7 @@ int main(int argc, char** argv) {
   LIFETIME_TRACKED_THREAD("thread to run bash #2", []() {
     LIFETIME_TRACKED_POPEN2(
         "popen2 running bash #2",
-        {"bash", "-c", "trap 'sleep 1; echo BYE; exit' SIGTERM; for i in $(seq 201 209); do echo $i; sleep 0.25; done"},
+        {"bash", "-c", "trap 'sleep 1; echo BYE; exit' SIGTERM; for i in $(seq 201 299); do echo $i; sleep 0.25; done"},
         [](std::string const& line) { ThreadSafeLog("bash #2: " + line); },
         [](Popen2Runtime&) { LIFETIME_SLEEP_UNTIL_SHUTDOWN(); });
   });
@@ -185,11 +185,21 @@ int main(int argc, char** argv) {
     LIFETIME_TRACKED_THREAD("[ NOT COOPERATIVE! ] thread to run bash #3", []() {
       LIFETIME_TRACKED_POPEN2(
           "[ NOT COOPERATIVE! ] popen2 running bash #3",
-          {"bash", "-c", "trap 'echo NOT_DYING' SIGTERM; for i in $(seq 301 309); do echo $i; sleep 0.25; done"},
+          {"bash", "-c", "trap 'echo NOT_DYING' SIGTERM; for i in $(seq 301 399); do echo $i; sleep 0.25; done"},
           [](std::string const& line) { ThreadSafeLog("bash #3: " + line); },
           [](Popen2Runtime&) { LIFETIME_SLEEP_UNTIL_SHUTDOWN(); });
     });
   }
+  SmallDelay();
+
+  // Also test that all is well if a POPEN2 process has terminated before `LIFETIME_MANAGER_EXIT()` is invoked.
+  LIFETIME_TRACKED_THREAD("thread to run bash #4", []() {
+    LIFETIME_TRACKED_POPEN2(
+        "popen2 running bash #4",
+        {"bash", "-c", "echo dead in 0.5 seconds; sleep 0.5; echo dead"},
+        [](std::string const& line) { ThreadSafeLog("bash #4: " + line); });
+  });
+  SmallDelay();
 
   auto const DumpLifetimeTrackedInstance = [](LifetimeTrackedInstance const& t) {
     ThreadSafeLog(current::strings::Printf("- %s @ %s:%d, up %.3lfs",
