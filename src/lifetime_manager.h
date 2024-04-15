@@ -188,14 +188,91 @@ struct LifetimeManagerSingleton final {
     termination_initiated_.Wait([](bool die) { return die; });
   }
 
-  void ExitForReal(int exit_code = 0, std::chrono::milliseconds graceful_delay = std::chrono::seconds(2)) {
+  void DoExitForReal(int exit_code = 0, std::chrono::milliseconds graceful_delay = std::chrono::seconds(2)) {
+    auto const t0 = current::time::Now();
     std::map<uint64_t, LifetimeTrackedInstance> original_still_alive = tracking_.ImmutableScopedAccessor()->still_alive;
     std::vector<uint64_t> still_alive_ids;
     for (auto const& e : original_still_alive) {
       still_alive_ids.push_back(e.first);
     }
-    auto const t0 = current::time::Now();
+    bool ok = false;
+    tracking_.WaitFor(
+        [this, &ok, &original_still_alive, &still_alive_ids, t0](TrackedInstances const& trk) {
+          std::vector<uint64_t> next_still_alive_ids;
+          auto const t1 = current::time::Now();
+          for (uint64_t id : still_alive_ids) {
+            auto const cit = trk.still_alive.find(id);
+            if (cit == std::end(trk.still_alive)) {
+              auto const& e = original_still_alive[id];
+              // NOTE(dkorolev): The order of `Gone after`-s may not be exactly the order of stuff terminating.
+              // TODO(dkorolev): May well tweak this one day.
+              Log(current::strings::Printf("Gone after %.3lfs: %s @ %s:%d",
+                                           1e-6 * (t1 - t0).count(),
+                                           e.description.c_str(),
+                                           e.file_basename.c_str(),
+                                           e.line_as_number));
+            } else {
+              next_still_alive_ids.push_back(id);
+            }
+          }
+          still_alive_ids = std::move(next_still_alive_ids);
+          if (trk.still_alive.empty()) {
+            ok = true;
+            return true;
+          } else {
+            return false;
+          }
+        },
+        graceful_delay);
+    if (ok) {
+      Log("`ExitForReal()` termination sequence successful, joining the presumably-done threads.");
+      std::vector<std::thread> threads_to_join = [this]() {
+        std::lock_guard lock(threads_to_join_mutex_);
+        return std::move(threads_to_join_);
+      }();
+      current::WaitableAtomic<bool> threads_joined_successfully(false);
+      std::thread threads_joiner([&threads_to_join, &threads_joined_successfully]() {
+        for (auto& t : threads_to_join) {
+          t.join();
+        }
+        threads_joined_successfully.SetValue(true);
+      });
+      bool need_to_abort_because_threads_are_not_all_joined = true;
+      threads_joined_successfully.WaitFor(
+          [&need_to_abort_because_threads_are_not_all_joined](bool b) {
+            if (b) {
+              need_to_abort_because_threads_are_not_all_joined = false;
+              return true;
+            } else {
+              return false;
+            }
+          },
+          graceful_delay);
+      if (!need_to_abort_because_threads_are_not_all_joined) {
+        Log("`ExitForReal()` termination sequence successful, all threads joined.");
+        threads_joiner.join();
+        Log("`ExitForReal()` termination sequence successful, all done.");
+        ::exit(exit_code);
+      } else {
+        Log("");
+        Log("`ExitForReal()` uncooperative threads remain, time to `abort()`.");
+        ::abort();
+      }
+    } else {
+      Log("");
+      Log("`ExitForReal()` termination sequence unsuccessful, still has offenders.");
+      tracking_.ImmutableUse([this](TrackedInstances const& trk) {
+        for (auto const& [_, s] : trk.still_alive) {
+          Log("Offender: " + s.ToShortString());
+        }
+      });
+      Log("");
+      Log("`ExitForReal()` time to `abort()`.");
+      ::abort();
+    }
+  }
 
+  void ExitForReal(int exit_code = 0, std::chrono::milliseconds graceful_delay = std::chrono::seconds(2)) {
     bool const previous_value = termination_initiated_.MutableUse([](std::atomic_bool& already_terminating) {
       bool const retval = already_terminating.load();
       already_terminating = true;
@@ -206,79 +283,22 @@ struct LifetimeManagerSingleton final {
       Log("Ignoring a consecutive call to `ExitForReal()`.");
     } else {
       Log("`ExitForReal()` called, initating termination sequence.");
-      bool ok = false;
-      tracking_.WaitFor(
-          [this, &ok, &original_still_alive, &still_alive_ids, t0](TrackedInstances const& trk) {
-            std::vector<uint64_t> next_still_alive_ids;
-            auto const t1 = current::time::Now();
-            for (uint64_t id : still_alive_ids) {
-              auto const cit = trk.still_alive.find(id);
-              if (cit == std::end(trk.still_alive)) {
-                auto const& e = original_still_alive[id];
-                Log(current::strings::Printf("Gone after %.3lfs: %s @ %s:%d",
-                                             1e-6 * (t1 - t0).count(),
-                                             e.description.c_str(),
-                                             e.file_basename.c_str(),
-                                             e.line_as_number));
-              } else {
-                next_still_alive_ids.push_back(id);
-              }
-            }
-            still_alive_ids = std::move(next_still_alive_ids);
-            if (trk.still_alive.empty()) {
-              ok = true;
-              return true;
-            } else {
-              return false;
-            }
-          },
-          graceful_delay);
-      if (ok) {
-        Log("`ExitForReal()` termination sequence successful, joining the presumably-done threads.");
-        std::vector<std::thread> threads_to_join = [this]() {
-          std::lock_guard lock(threads_to_join_mutex_);
-          return std::move(threads_to_join_);
-        }();
-        current::WaitableAtomic<bool> threads_joined_successfully(false);
-        std::thread threads_joiner([&threads_to_join, &threads_joined_successfully]() {
-          for (auto& t : threads_to_join) {
-            t.join();
-          }
-          threads_joined_successfully.SetValue(true);
-        });
-        bool need_to_abort_because_threads_are_not_all_joined = true;
-        threads_joined_successfully.WaitFor(
-            [&need_to_abort_because_threads_are_not_all_joined](bool b) {
-              if (b) {
-                need_to_abort_because_threads_are_not_all_joined = false;
-                return true;
-              } else {
-                return false;
-              }
-            },
-            graceful_delay);
-        if (!need_to_abort_because_threads_are_not_all_joined) {
-          Log("`ExitForReal()` termination sequence successful, all threads joined.");
-          threads_joiner.join();
-          Log("`ExitForReal()` termination sequence successful, all done.");
-          ::exit(exit_code);
-        } else {
-          Log("");
-          Log("`ExitForReal()` uncooperative threads remain, time to `abort()`.");
-          ::abort();
-        }
-      } else {
-        Log("");
-        Log("`ExitForReal()` termination sequence unsuccessful, still has offenders.");
-        tracking_.ImmutableUse([this](TrackedInstances const& trk) {
-          for (auto const& [_, s] : trk.still_alive) {
-            Log("Offender: " + s.ToShortString());
-          }
-        });
-        Log("");
-        Log("`ExitForReal()` time to `abort()`.");
-        ::abort();
-      }
+      DoExitForReal(exit_code, graceful_delay);
+    }
+  }
+
+  ~LifetimeManagerSingleton() {
+    // Should die organically!
+    bool const previous_value = termination_initiated_.MutableUse([](std::atomic_bool& already_terminating) {
+      bool const retval = already_terminating.load();
+      already_terminating = true;
+      return retval;
+    });
+
+    if (!previous_value) {
+      Log("");
+      Log("The program is terminating organically.");
+      DoExitForReal();
     }
   }
 };
