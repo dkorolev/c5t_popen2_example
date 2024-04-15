@@ -350,13 +350,20 @@ T& CreateLifetimeTrackedInstance(char const* file, int line, std::string const& 
 // TODO(dkorolev): Maybe make this into a variadic macro to allow passing arguments to this thread in a C+-native way.
 // NOTE(dkorolev): Ensure that the thread body registers its lifetime to the singleton manager,
 //                 to eliminate the risk of this thread being `.join()`-ed before it is fully done.
-#define LIFETIME_TRACKED_THREAD(desc, body)                      \
-  LIFETIME_MANAGER_SINGLETON_IMPL().EmplaceThreadImpl([&]() {    \
-    auto& mgr = LIFETIME_MANAGER_SINGLETON_IMPL();               \
-    size_t const id = mgr.TrackingAdd(desc, __FILE__, __LINE__); \
-    body();                                                      \
-    mgr.TrackingRemove(id);                                      \
-  })
+// NOTE(dkorolev): The `ready_to_go` part is essential because otherwise the lambda capture list may not intiailize yet!
+// TODO(dkorolev): Why and how so though? I better investigate this deeper before using `std::move`-d lambda captures!
+#define LIFETIME_TRACKED_THREAD(desc, body)                        \
+  do {                                                             \
+    current::WaitableAtomic<bool> ready_to_go(false);              \
+    LIFETIME_MANAGER_SINGLETON_IMPL().EmplaceThreadImpl([&]() {    \
+      auto& mgr = LIFETIME_MANAGER_SINGLETON_IMPL();               \
+      size_t const id = mgr.TrackingAdd(desc, __FILE__, __LINE__); \
+      ready_to_go.SetValue(true);                                  \
+      body();                                                      \
+      mgr.TrackingRemove(id);                                      \
+    });                                                            \
+    ready_to_go.Wait([](bool b) { return b; });                    \
+  } while (false)
 
 // TODO(dkorolev): This `#ifdef` is ugly, and it will get fixed once we standardize our `cmake`-based builds.
 #ifdef C5T_POPEN2_H_INCLUDED
