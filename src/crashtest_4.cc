@@ -13,6 +13,5 @@ int main() {
     std::this_thread::sleep_for(std::chrono::milliseconds(30));
   });
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
-  // LIFETIME_MANAGER_EXIT(0);
-  std::cerr << "natural, organic exit." << std::endl;
+  std::cerr << "natural, organic exit." << std::endl;  // Delibrately no `LIFETIME_MANAGER_EXIT(0)`.
 }
