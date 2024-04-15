@@ -2,7 +2,7 @@
 
 #include "bricks/sync/waitable_atomic.h"
 #include "popen2.h"
-#include "lifetime_manager.h"
+#include "lib_c5t_lifetime_manager.h"
 #include "bricks/dflags/dflags.h"
 #include "bricks/strings/printf.h"
 

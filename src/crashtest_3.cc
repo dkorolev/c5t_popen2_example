@@ -2,7 +2,7 @@
 #include <chrono>
 
 #include "popen2.h"
-#include "lifetime_manager.h"
+#include "lib_c5t_lifetime_manager.h"
 
 int main() {
   LIFETIME_MANAGER_ACTIVATE([](std::string const& s) { std::cerr << "MGR: " << s << std::endl; });
