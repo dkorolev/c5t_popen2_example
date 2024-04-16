@@ -6,6 +6,7 @@ on:
     types: [opened, synchronize]
   push:
     branches:
+    - main
     - stable
 
 jobs:
