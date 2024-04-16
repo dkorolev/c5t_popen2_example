@@ -310,10 +310,23 @@ struct LifetimeManagerSingleton final {
 #define LIFETIME_SHUTTING_DOWN LIFETIME_MANAGER_SINGLETON_IMPL().termination_initiated_atomic_
 
 // Returns the `[[nodiscard]]`-ed scope for the lifetime of the passed-in lambda being registered.
-#define LIFETIME_NOTIFY_OF_SHUTDOWN(f) LIFETIME_MANAGER_SINGLETON_IMPL().SubscribeToTerminationEvent(f)
+template <class F>
+[[nodiscard]] inline current::WaitableAtomicSubscriberScope LIFETIME_NOTIFY_OF_SHUTDOWN(F&& f) {
+  return LIFETIME_MANAGER_SINGLETON_IMPL().SubscribeToTerminationEvent(std::forward<F>(f));
+}
 
 // Waits forever. Useful for "singleton" threads and in `popen2()` runners for what should run forever.
-#define LIFETIME_SLEEP_UNTIL_SHUTDOWN(f) LIFETIME_MANAGER_SINGLETON_IMPL().WaitUntilTimeToDie()
+inline void LIFETIME_SLEEP_UNTIL_SHUTDOWN() {
+  LIFETIME_MANAGER_SINGLETON_IMPL().WaitUntilTimeToDie();
+}
+
+// Use in place of `std::this_thread::sleep_for(...)`. Also returns `false` if it's time to die.
+template <class DT>
+inline bool LIFETIME_SLEEP_FOR(DT&& dt) {
+  LIFETIME_MANAGER_SINGLETON_IMPL().termination_initiated_.WaitFor([](std::atomic_bool const& b) { return b.load(); },
+                                                                   std::forward<DT>(dt));
+  return !LIFETIME_SHUTTING_DOWN;
+}
 
 #define LIFETIME_TRACKED_DEBUG_DUMP(...) LIFETIME_MANAGER_SINGLETON_IMPL().DumpActive(__VA_ARGS__)
 
