@@ -41,8 +41,7 @@ struct TimerEvent final {
   TimerEvent(TimerEvent const&) = delete;
   TimerEvent& operator=(TimerEvent const&) = delete;
 
-  TimerEvent(uint32_t i) : i(i) {
-  }
+  TimerEvent(uint32_t i) : i(i) {}
 };
 
 struct InputEvent final {
@@ -52,8 +51,7 @@ struct InputEvent final {
   InputEvent(InputEvent const&) = delete;
   InputEvent& operator=(InputEvent const&) = delete;
 
-  InputEvent(std::string s) : s(std::move(s)) {
-  }
+  InputEvent(std::string s) : s(std::move(s)) {}
 };
 
 DEFINE_uint16(port, 5555, "");
@@ -120,16 +118,10 @@ int main(int argc, char** argv) {
                                   }
                                 }
 
-                                void OnEvent(TimerEvent const& te) {
-                                  Send(current::ToString(te.i) + '\n');
-                                }
-                                void OnEvent(InputEvent const& ie) {
-                                  Send(ie.s + '\n');
-                                }
-                                void OnBatchDone() {
-                                }
-                                void OnShutdown() {
-                                }
+                                void OnEvent(TimerEvent const& te) { Send(current::ToString(te.i) + '\n'); }
+                                void OnEvent(InputEvent const& ie) { Send(ie.s + '\n'); }
+                                void OnBatchDone() {}
+                                void OnShutdown() {}
                               };
                               ActorSubscriberScope const s1 =
                                   SubscribeTo<ChunksSender>(shutdown, std::move(moved_r))(topic_timer)(topic_input);

@@ -46,9 +46,7 @@ class TopicIDGenerator final {
   std::atomic_uint64_t next_topic_id = 0ull;
 
  public:
-  TopicID GetNextUniqueTopicID() {
-    return static_cast<TopicID>(next_topic_id++);
-  }
+  TopicID GetNextUniqueTopicID() { return static_cast<TopicID>(next_topic_id++); }
 };
 
 struct ConstructTopicScope final {};
@@ -62,14 +60,9 @@ class TopicKey final {
   TopicKey() = delete;
 
  public:
-  TopicKey(ConstructTopicScope) : id_(current::Singleton<TopicIDGenerator>().GetNextUniqueTopicID()) {
-  }
-  TopicID GetTopicID() const {
-    return id_;
-  }
-  operator TopicID() const {
-    return GetTopicID();
-  }
+  TopicKey(ConstructTopicScope) : id_(current::Singleton<TopicIDGenerator>().GetNextUniqueTopicID()) {}
+  TopicID GetTopicID() const { return id_; }
+  operator TopicID() const { return GetTopicID(); }
 };
 
 template <class T>
@@ -96,12 +89,9 @@ class TopicsSubcribersAllTypesSingleton final : public SubscribersCleanupLogic {
   std::unordered_map<EventsSubscriberID, std::unordered_set<std::type_index>> types_per_ids_;
 
  public:
-  TopicsSubcribersAllTypesSingleton() : ids_used_(0ull) {
-  }
+  TopicsSubcribersAllTypesSingleton() : ids_used_(0ull) {}
 
-  EventsSubscriberID AllocateNextID() {
-    return static_cast<EventsSubscriberID>(++ids_used_);
-  }
+  EventsSubscriberID AllocateNextID() { return static_cast<EventsSubscriberID>(++ids_used_); }
 
   template <typename T>
   void RegisterTypeForSubscriber(EventsSubscriberID sid, SubscribersCleanupLogic& respective_singleton_instance) {
@@ -132,12 +122,9 @@ class TopicsSubcribersPerTypeSingleton final : public SubscribersCleanupLogic {
   std::unordered_map<TopicID, std::unordered_map<EventsSubscriberID, std::function<void(std::shared_ptr<T>)>>> m_;
 
  public:
-  TopicsSubcribersPerTypeSingleton() : ids_used_(0ull) {
-  }
+  TopicsSubcribersPerTypeSingleton() : ids_used_(0ull) {}
 
-  EventsSubscriberID AllocateNextID() {
-    return static_cast<EventsSubscriberID>(++ids_used_);
-  }
+  EventsSubscriberID AllocateNextID() { return static_cast<EventsSubscriberID>(++ids_used_); }
 
   void AddLink(EventsSubscriberID sid, TopicID tid, std::function<void(std::shared_ptr<T>)> f) {
     std::lock_guard lock(mutex_);
@@ -232,8 +219,7 @@ class ActorSubscriberScopeForImpl final : public ActorSubscriberScopeImpl {
 
  public:
   ActorSubscriberScopeForImpl(ConstructTopicsSubscriberScopeImpl, EventsSubscriberID id, std::unique_ptr<C> worker)
-      : unique_id(id), worker(std::move(worker)), thread([this]() { Thread(); }) {
-  }
+      : unique_id(id), worker(std::move(worker)), thread([this]() { Thread(); }) {}
 
   ~ActorSubscriberScopeForImpl() override {
     current::Singleton<TopicsSubcribersAllTypesSingleton>().CleanupSubscriberByID(unique_id);
@@ -259,8 +245,7 @@ class ActorSubscriberScopeFor final {
       : impl_(std::make_unique<ActorSubscriberScopeForImpl<C>>(
             ConstructTopicsSubscriberScopeImpl(),
             current::Singleton<TopicsSubcribersAllTypesSingleton>().AllocateNextID(),
-            std::move(worker))) {
-  }
+            std::move(worker))) {}
 
   ActorSubscriberScopeFor(ActorSubscriberScopeFor&& rhs) = default;
 
@@ -295,8 +280,7 @@ class ActorSubscriberScope final {
   ActorSubscriberScope& operator=(ActorSubscriberScope&&) = default;
 
   template <class T>
-  ActorSubscriberScope(ActorSubscriberScopeFor<T>&& rhs) : type_erased_impl_(std::move(rhs.impl_)) {
-  }
+  ActorSubscriberScope(ActorSubscriberScopeFor<T>&& rhs) : type_erased_impl_(std::move(rhs.impl_)) {}
 
   template <class T>
   ActorSubscriberScope& operator=(ActorSubscriberScopeFor<T>&& rhs) {
@@ -318,8 +302,7 @@ class NullableActorSubscriberScope final {
   NullableActorSubscriberScope& operator=(NullableActorSubscriberScope&&) = default;
 
   template <class T>
-  NullableActorSubscriberScope(ActorSubscriberScopeFor<T>&& rhs) : type_erased_impl_(std::move(rhs.impl_)) {
-  }
+  NullableActorSubscriberScope(ActorSubscriberScopeFor<T>&& rhs) : type_erased_impl_(std::move(rhs.impl_)) {}
 
   template <class T>
   NullableActorSubscriberScope& operator=(ActorSubscriberScopeFor<T>&& rhs) {
