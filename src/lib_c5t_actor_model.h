@@ -246,6 +246,7 @@ template <class C>
 class ActorSubscriberScopeFor final {
  private:
   friend class ActorSubscriberScope;
+  friend class NullableActorSubscriberScope;
 
   ActorSubscriberScopeFor() = delete;
   ActorSubscriberScopeFor(ActorSubscriberScopeFor const&) = delete;
@@ -294,11 +295,40 @@ class ActorSubscriberScope final {
   ActorSubscriberScope& operator=(ActorSubscriberScope&&) = default;
 
   template <class T>
-  ActorSubscriberScope(ActorSubscriberScopeFor<T>&& rhs) : type_erased_impl_(std::move(rhs.impl_)) {}
+  ActorSubscriberScope(ActorSubscriberScopeFor<T>&& rhs) : type_erased_impl_(std::move(rhs.impl_)) {
+  }
 
   template <class T>
   ActorSubscriberScope& operator=(ActorSubscriberScopeFor<T>&& rhs) {
     type_erased_impl_ = std::move(rhs.impl);
+    return *this;
+  }
+};
+
+class NullableActorSubscriberScope final {
+ private:
+  NullableActorSubscriberScope(NullableActorSubscriberScope const&) = delete;
+  NullableActorSubscriberScope& operator=(NullableActorSubscriberScope const&) = delete;
+
+  std::unique_ptr<ActorSubscriberScopeImpl> type_erased_impl_;
+
+ public:
+  NullableActorSubscriberScope() = default;
+  NullableActorSubscriberScope(NullableActorSubscriberScope&&) = default;
+  NullableActorSubscriberScope& operator=(NullableActorSubscriberScope&&) = default;
+
+  template <class T>
+  NullableActorSubscriberScope(ActorSubscriberScopeFor<T>&& rhs) : type_erased_impl_(std::move(rhs.impl_)) {
+  }
+
+  template <class T>
+  NullableActorSubscriberScope& operator=(ActorSubscriberScopeFor<T>&& rhs) {
+    type_erased_impl_ = std::move(rhs.impl_);
+    return *this;
+  }
+
+  NullableActorSubscriberScope& operator=(std::nullptr_t) {
+    type_erased_impl_ = nullptr;
     return *this;
   }
 };
