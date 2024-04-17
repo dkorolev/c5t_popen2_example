@@ -22,9 +22,7 @@ void handler(int n) {
 }
 
 struct ScopedObject final {
-  ScopedObject() {
-    std::cout << "constructor" << std::endl;
-  }
+  ScopedObject() { std::cout << "constructor" << std::endl; }
   ~ScopedObject() {
     std::cout << "destructor" << std::endl;
     std::this_thread::sleep_for(std::chrono::milliseconds(500));

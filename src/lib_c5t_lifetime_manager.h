@@ -43,12 +43,9 @@ struct LifetimeTrackedInstance final {
         file_basename(BaseName(file_fullname)),
         line_as_number(line),
         line_as_string(current::ToString(line_as_number)),
-        t_added(t) {
-  }
+        t_added(t) {}
 
-  std::string ToShortString() const {
-    return description + " @ " + file_basename + ':' + line_as_string;
-  }
+  std::string ToShortString() const { return description + " @ " + file_basename + ':' + line_as_string; }
 };
 
 struct LifetimeManagerSingleton final {
@@ -85,8 +82,7 @@ struct LifetimeManagerSingleton final {
   LifetimeManagerSingleton()
       : initialized_(false),
         termination_initiated_(false),
-        termination_initiated_atomic_(*termination_initiated_.MutableScopedAccessor()) {
-  }
+        termination_initiated_atomic_(*termination_initiated_.MutableScopedAccessor()) {}
 
   void LIFETIME_MANAGER_ACTIVATE_IMPL(std::function<void(std::string const&)> logger) {
     bool const was_initialized = initialized_;
@@ -316,9 +312,7 @@ template <class F>
 }
 
 // Waits forever. Useful for "singleton" threads and in `popen2()` runners for what should run forever.
-inline void LIFETIME_SLEEP_UNTIL_SHUTDOWN() {
-  LIFETIME_MANAGER_SINGLETON_IMPL().WaitUntilTimeToDie();
-}
+inline void LIFETIME_SLEEP_UNTIL_SHUTDOWN() { LIFETIME_MANAGER_SINGLETON_IMPL().WaitUntilTimeToDie(); }
 
 // Use in place of `std::this_thread::sleep_for(...)`. Also returns `false` if it's time to die.
 template <class DT>

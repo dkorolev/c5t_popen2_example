@@ -31,16 +31,12 @@ struct CooperativeSlowlyDeletingObject final {
     ThreadSafeLog("Deleting the CooperativeSlowlyDeletingObject.");
     ThreadSafeLog("CooperativeSlowlyDeletingObject deleted.");
   }
-  void Dump() const {
-    ThreadSafeLog("CooperativeSlowlyDeletingObject::value_ == " + current::ToString(value_));
-  }
+  void Dump() const { ThreadSafeLog("CooperativeSlowlyDeletingObject::value_ == " + current::ToString(value_)); }
 };
 
 // This lifetime-aware object will destruct gracefully.
 struct SemiCooperativeSlowlyDeletingObject final {
-  SemiCooperativeSlowlyDeletingObject() {
-    ThreadSafeLog("SemiCooperativeSlowlyDeletingObject created.");
-  }
+  SemiCooperativeSlowlyDeletingObject() { ThreadSafeLog("SemiCooperativeSlowlyDeletingObject created."); }
 
   ~SemiCooperativeSlowlyDeletingObject() {
     ThreadSafeLog("Deleting the SemiCooperativeSlowlyDeletingObject.");
@@ -48,16 +44,12 @@ struct SemiCooperativeSlowlyDeletingObject final {
     ThreadSafeLog("SemiCooperativeSlowlyDeletingObject deleted.");
   }
 
-  void Dump() const {
-    ThreadSafeLog("SemiCooperativeSlowlyDeletingObject is alive.");
-  }
+  void Dump() const { ThreadSafeLog("SemiCooperativeSlowlyDeletingObject is alive."); }
 };
 
 // This long-to-destruct object will force `abort()`, since the graceful shutdown delay is way under ten seconds.
 struct NonCooperativeSlowlyDeletingObject final {
-  NonCooperativeSlowlyDeletingObject() {
-    ThreadSafeLog("NonCooperativeSlowlyDeletingObject created.");
-  }
+  NonCooperativeSlowlyDeletingObject() { ThreadSafeLog("NonCooperativeSlowlyDeletingObject created."); }
 
   ~NonCooperativeSlowlyDeletingObject() {
     ThreadSafeLog("Deleting the NonCooperativeSlowlyDeletingObject.");
@@ -66,9 +58,7 @@ struct NonCooperativeSlowlyDeletingObject final {
     ThreadSafeLog("[ SHOULD NOT SEE THIS ] NonCooperativeSlowlyDeletingObject deleted.");
   }
 
-  void Dump() const {
-    ThreadSafeLog("NonCooperativeSlowlyDeletingObject is alive.");
-  }
+  void Dump() const { ThreadSafeLog("NonCooperativeSlowlyDeletingObject is alive."); }
 };
 
 int main(int argc, char** argv) {
