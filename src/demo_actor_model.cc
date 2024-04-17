@@ -31,28 +31,10 @@ TESTS:
 #include "lib_c5t_lifetime_manager.h"
 #include "lib_c5t_actor_model.h"
 
+#include "lib_demo_actor_model_extra.h"
+
 #include "bricks/dflags/dflags.h"
 #include "blocks/http/api.h"
-
-struct TimerEvent final {
-  uint32_t i;
-
-  TimerEvent() = delete;
-  TimerEvent(TimerEvent const&) = delete;
-  TimerEvent& operator=(TimerEvent const&) = delete;
-
-  TimerEvent(uint32_t i) : i(i) {}
-};
-
-struct InputEvent final {
-  std::string s;
-
-  InputEvent() = delete;
-  InputEvent(InputEvent const&) = delete;
-  InputEvent& operator=(InputEvent const&) = delete;
-
-  InputEvent(std::string s) : s(std::move(s)) {}
-};
 
 DEFINE_uint16(port, 5555, "");
 
@@ -87,14 +69,7 @@ int main(int argc, char** argv) {
     r(oss.str());
   });
 
-  LIFETIME_TRACKED_THREAD("timer", [topic_timer]() mutable {
-    int i = 0;
-    while (!LIFETIME_SHUTTING_DOWN) {
-      ++i;
-      EmitTo<TimerEvent>(topic_timer, i);
-      LIFETIME_SLEEP_FOR(std::chrono::milliseconds(1000));
-    }
-  });
+  StartTimerThread(topic_timer);
 
   scope += http.Register("/", [&](Request r) {
     // TODO: TOPICS ARE NOT COPYABLE!
