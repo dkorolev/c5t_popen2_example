@@ -359,20 +359,20 @@ T& CreateLifetimeTrackedInstance(char const* file, int line, std::string const& 
 //                 to eliminate the risk of this thread being `.join()`-ed before it is fully done.
 // NOTE(dkorolev): The `ready_to_go` part is essential because otherwise the lambda capture list may not intiailize yet!
 // TODO(dkorolev): Why and how so though? I better investigate this deeper before using `std::move`-d lambda captures!
-#define LIFETIME_TRACKED_THREAD(desc0, body)                                                   \
-  do {                                                                                         \
-    current::WaitableAtomic<bool> ready_to_go(false);                                          \
-    std::string desc(desc0);                                                                   \
-    LIFETIME_MANAGER_SINGLETON_IMPL().EmplaceThreadImpl(                                       \
-        [moved_desc = std::move(desc), moved_body = std::move(body), &ready_to_go]() mutable { \
-          auto& mgr = LIFETIME_MANAGER_SINGLETON_IMPL();                                       \
-          size_t const id = mgr.TrackingAdd(moved_desc, __FILE__, __LINE__);                   \
-          ready_to_go.SetValue(true);                                                          \
-          moved_body();                                                                        \
-          mgr.TrackingRemove(id);                                                              \
-        });                                                                                    \
-    ready_to_go.Wait([](bool b) { return b; });                                                \
-  } while (false)
+
+template <typename F>
+void LIFETIME_TRACKED_THREAD(std::string desc, F&& body) {
+  current::WaitableAtomic<bool> ready_to_go(false);
+  LIFETIME_MANAGER_SINGLETON_IMPL().EmplaceThreadImpl(
+      [moved_desc = std::move(desc), moved_body = std::forward<F>(body), &ready_to_go]() mutable {
+        auto& mgr = LIFETIME_MANAGER_SINGLETON_IMPL();
+        size_t const id = mgr.TrackingAdd(moved_desc, __FILE__, __LINE__);
+        ready_to_go.SetValue(true);
+        moved_body();
+        mgr.TrackingRemove(id);
+      });
+  ready_to_go.Wait([](bool b) { return b; });
+}
 
 // TODO(dkorolev): This `#ifdef` is ugly, and it will get fixed once we standardize our `cmake`-based builds.
 // NOTE(dkorolev): `LIFETIME_TRACKED_POPEN2` extrends the "vanilla" `popen2()` in two ways.
@@ -418,4 +418,5 @@ inline int LIFETIME_TRACKED_POPEN2_IMPL(
   return retval;
 }
 
-#define LIFETIME_TRACKED_POPEN2(text, ...) LIFETIME_TRACKED_POPEN2_IMPL<Popen2Runtime>(text, __FILE__, __LINE__, __VA_ARGS__)
+#define LIFETIME_TRACKED_POPEN2(text, ...) \
+  LIFETIME_TRACKED_POPEN2_IMPL<Popen2Runtime>(text, __FILE__, __LINE__, __VA_ARGS__)
