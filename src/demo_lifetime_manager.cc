@@ -65,7 +65,7 @@ int main(int argc, char** argv) {
   ParseDFlags(&argc, &argv);
 
   // The lifetime manager ensures the log functions are called in the thread-safe way.
-  LIFETIME_MANAGER_ACTIVATE([](std::string const& s) { std::cerr << "MGR: " << s << std::endl; });
+  LIFETIME_MANAGER_SET_LOGGER([](std::string const& s) { std::cerr << "MGR: " << s << std::endl; });
 
   auto const SmallDelay = []() {
     // Just so that the terminal output comes in predictable order, since there are `bash` invocations involved.

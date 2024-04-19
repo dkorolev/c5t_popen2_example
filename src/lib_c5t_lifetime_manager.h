@@ -57,10 +57,10 @@ struct LifetimeManagerSingleton final {
     std::map<uint64_t, LifetimeTrackedInstance> still_alive;
   };
 
-  std::atomic_bool initialized_;
+  mutable std::atomic_bool logger_initialized_;
 
   mutable std::mutex logger_mutex_;
-  std::function<void(std::string const&)> logger_ = nullptr;
+  mutable std::function<void(std::string const&)> logger_ = nullptr;
 
   current::WaitableAtomic<std::atomic_bool> termination_initiated_;
   std::atomic_bool& termination_initiated_atomic_;
@@ -80,32 +80,26 @@ struct LifetimeManagerSingleton final {
   }
 
   LifetimeManagerSingleton()
-      : initialized_(false),
+      : logger_initialized_(false),
         termination_initiated_(false),
         termination_initiated_atomic_(*termination_initiated_.MutableScopedAccessor()) {}
 
-  void LIFETIME_MANAGER_ACTIVATE_IMPL(std::function<void(std::string const&)> logger) {
-    bool const was_initialized = initialized_;
-    initialized_ = true;
+  void SetLogger(std::function<void(std::string const&)> logger) const {
+    logger_initialized_ = true;
     {
       std::lock_guard lock(logger_mutex_);
       logger_ = logger;
     }
-    if (was_initialized) {
-      Log("Called `LIFETIME_MANAGER_ACTIVATE()` twice, aborting.");
-      ::abort();
-    }
   }
 
-  void AbortIfNotInitialized() const {
-    if (!initialized_) {
-      Log("Was not `LIFETIME_MANAGER_ACTIVATE()`, aborting.");
-      ::abort();
+  void EnsureHasLogger() const {
+    if (!logger_initialized_) {
+      SetLogger([](std::string const& line) { std::cerr << "LIFETIME_MANAGER: " << line << std::endl; });
     }
   }
 
   size_t TrackingAdd(std::string const& description, char const* file, size_t line) {
-    AbortIfNotInitialized();
+    EnsureHasLogger();
     return tracking_.MutableUse([=](TrackedInstances& trk) {
       uint64_t const id = trk.next_id_desc;
       --trk.next_id_desc;
@@ -123,7 +117,7 @@ struct LifetimeManagerSingleton final {
   // (There is a mechanism to guard against this too, with the second possible `::abort()` clause, but still.)
   template <typename... ARGS>
   void EmplaceThreadImpl(ARGS&&... args) {
-    AbortIfNotInitialized();
+    EnsureHasLogger();
     termination_initiated_.ImmutableUse([&](bool already_terminating) {
       // It's OK to just not start the thread if already in the "terminating" mode.
       if (!already_terminating) {
@@ -134,7 +128,7 @@ struct LifetimeManagerSingleton final {
   }
 
   [[nodiscard]] current::WaitableAtomicSubscriberScope SubscribeToTerminationEvent(std::function<void()> f0) {
-    AbortIfNotInitialized();
+    EnsureHasLogger();
     // Ensures that `f0()` will only be called once, possibly from the very call to `SubscribeToTerminationEvent()`.
     auto const f = [this, called = std::make_shared<current::WaitableAtomic<bool>>(false), f1 = std::move(f0)]() {
       // Guard against spurious wakeups.
@@ -163,7 +157,7 @@ struct LifetimeManagerSingleton final {
   }
 
   void DumpActive(std::function<void(LifetimeTrackedInstance const&)> f0 = nullptr) const {
-    AbortIfNotInitialized();
+    EnsureHasLogger();
     std::function<void(LifetimeTrackedInstance const&)> f =
         f0 != nullptr ? f0 : [this](LifetimeTrackedInstance const& s) { Log(s.ToShortString()); };
     tracking_.ImmutableUse([&f](TrackedInstances const& trk) {
@@ -180,7 +174,7 @@ struct LifetimeManagerSingleton final {
     // 2) Create everything in it, preferably as `Owned<WaitableAtomic<...>>`.
     // 3) At the end of this thread wait until it is time to die.
     // 4) Once it is time to die, everything this thread has created will be destroyed, gracefully or forcefully.
-    AbortIfNotInitialized();
+    EnsureHasLogger();
     termination_initiated_.Wait([](bool die) { return die; });
   }
 
@@ -300,7 +294,7 @@ struct LifetimeManagerSingleton final {
 };
 
 #define LIFETIME_MANAGER_SINGLETON_IMPL() current::Singleton<LifetimeManagerSingleton>()
-#define LIFETIME_MANAGER_ACTIVATE(logger) LIFETIME_MANAGER_SINGLETON_IMPL().LIFETIME_MANAGER_ACTIVATE_IMPL(logger)
+#define LIFETIME_MANAGER_SET_LOGGER(logger) LIFETIME_MANAGER_SINGLETON_IMPL().SetLogger(logger)
 
 // O(1), just `.load()`-s the atomic.
 #define LIFETIME_SHUTTING_DOWN LIFETIME_MANAGER_SINGLETON_IMPL().termination_initiated_atomic_
