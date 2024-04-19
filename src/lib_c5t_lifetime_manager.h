@@ -354,14 +354,13 @@ T& CreateLifetimeTrackedInstance(char const* file, int line, std::string const& 
 
 #define LIFETIME_TRACKED_INSTANCE(type, ...) CreateLifetimeTrackedInstance<type>(__FILE__, __LINE__, __VA_ARGS__)
 
-// TODO(dkorolev): Maybe make this into a variadic macro to allow passing arguments to this thread in a C+-native way.
 // NOTE(dkorolev): Ensure that the thread body registers its lifetime to the singleton manager,
 //                 to eliminate the risk of this thread being `.join()`-ed before it is fully done.
 // NOTE(dkorolev): The `ready_to_go` part is essential because otherwise the lambda capture list may not intiailize yet!
 // TODO(dkorolev): Why and how so though? I better investigate this deeper before using `std::move`-d lambda captures!
 
-template <typename F>
-void LIFETIME_TRACKED_THREAD(std::string desc, F&& body) {
+template <typename F, class... ARGS>
+void LIFETIME_TRACKED_THREAD(std::string desc, F&& body, ARGS&&... args) {
   current::WaitableAtomic<bool> ready_to_go(false);
   LIFETIME_MANAGER_SINGLETON_IMPL().EmplaceThreadImpl(
       [moved_desc = std::move(desc), moved_body = std::forward<F>(body), &ready_to_go]() mutable {
@@ -370,7 +369,8 @@ void LIFETIME_TRACKED_THREAD(std::string desc, F&& body) {
         ready_to_go.SetValue(true);
         moved_body();
         mgr.TrackingRemove(id);
-      });
+      },
+      std::forward<ARGS>(args)...);
   ready_to_go.Wait([](bool b) { return b; });
 }
 
