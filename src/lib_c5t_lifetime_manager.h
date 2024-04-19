@@ -375,8 +375,6 @@ T& CreateLifetimeTrackedInstance(char const* file, int line, std::string const& 
   } while (false)
 
 // TODO(dkorolev): This `#ifdef` is ugly, and it will get fixed once we standardize our `cmake`-based builds.
-#ifdef C5T_POPEN2_H_INCLUDED
-
 // NOTE(dkorolev): `LIFETIME_TRACKED_POPEN2` extrends the "vanilla" `popen2()` in two ways.
 //
 // 1) The user provides the "display name" for the inner graceful "task manager" to report what is running, and
@@ -386,13 +384,17 @@ T& CreateLifetimeTrackedInstance(char const* file, int line, std::string const& 
 // The user can, of course, send SIGTERM to the child process via the "native" `popen2()`-provided means.
 // It is guaranteed that SIGTERM will only be sent to the child process once.
 
+// NOTE(dkorolev): This `T_POPEN2_RUNTIME` is not a useful template type per se, it is only here to ensure
+//                 that the function is not compiled until used. This way, if `C5T/popen` is neither included
+//                 nor used, there are no build warnings/errors whatsoever.
+template <class T_POPEN2_RUNTIME>
 inline int LIFETIME_TRACKED_POPEN2_IMPL(
     std::string const& text,
     char const* file,
     size_t line,
     std::vector<std::string> const& cmdline,
     std::function<void(const std::string&)> cb_line,
-    std::function<void(Popen2Runtime&)> cb_code = [](Popen2Runtime&) {},
+    std::function<void(T_POPEN2_RUNTIME&)> cb_code = [](T_POPEN2_RUNTIME&) {},
     std::vector<std::string> const& env = {}) {
   auto& mgr = LIFETIME_MANAGER_SINGLETON_IMPL();
   size_t const id = mgr.TrackingAdd(text, file, line);
@@ -400,7 +402,7 @@ inline int LIFETIME_TRACKED_POPEN2_IMPL(
   int const retval = popen2(
       cmdline,
       cb_line,
-      [copy_popen_done = popen2_done, &mgr, moved_cb_code = std::move(cb_code)](Popen2Runtime& ctx) {
+      [copy_popen_done = popen2_done, &mgr, moved_cb_code = std::move(cb_code)](T_POPEN2_RUNTIME& ctx) {
         // NOTE(dkorolev): On `popen2()` level it's OK to call `.Kill()` multiple times, only one will go through.
         auto const scope =
             mgr.SubscribeToTerminationEvent([&ctx, &mgr, captured_popen_done = std::move(copy_popen_done)]() {
@@ -416,6 +418,4 @@ inline int LIFETIME_TRACKED_POPEN2_IMPL(
   return retval;
 }
 
-#define LIFETIME_TRACKED_POPEN2(text, ...) LIFETIME_TRACKED_POPEN2_IMPL(text, __FILE__, __LINE__, __VA_ARGS__)
-
-#endif  // C5T_POPEN2_H_INCLUDED
+#define LIFETIME_TRACKED_POPEN2(text, ...) LIFETIME_TRACKED_POPEN2_IMPL<Popen2Runtime>(text, __FILE__, __LINE__, __VA_ARGS__)
