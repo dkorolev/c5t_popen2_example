@@ -414,3 +414,14 @@ inline int LIFETIME_TRACKED_POPEN2_IMPL(
 
 #define LIFETIME_TRACKED_POPEN2(text, ...) \
   LIFETIME_TRACKED_POPEN2_IMPL<Popen2Runtime>(text, __FILE__, __LINE__, __VA_ARGS__)
+
+inline std::string ProvidedStringOrLifetimeManager(std::string s = "C5T_LIFETIME_MGR") { return s; }
+
+#define LIFETIME_MANAGER_USE_C5T_LOGGER(...)                                    \
+  do {                                                                          \
+    std::string const title = ProvidedStringOrLifetimeManager(__VA_ARGS__);     \
+    LIFETIME_MANAGER_SET_LOGGER([copy_of_title = title](std::string const& s) { \
+      std::cerr << copy_of_title << ": " << s << std::endl;                     \
+      C5T_LOGGER(copy_of_title) << s;                                           \
+    });                                                                         \
+  } while (false)
